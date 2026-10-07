@@ -11,6 +11,9 @@
     "collector",
     "THIRD_PARTY_NOTICES.md"
   ],
+  "scripts": {
+    "test": "node --test \"collector/test/*.test.js\""
+  },
   "engines": {
     "node": ">=22.13.0"
   },

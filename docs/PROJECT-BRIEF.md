@@ -94,9 +94,18 @@ Sumber data di codeburn (sudah dicek pada v0.9.25):
 - `codeburn sessions --format json --contributions` — satu baris per sesi, memuat semua field sesi di atas.
 - `codeburn report --format json` — ringkasan, harian, per model, per kategori, per tool.
 
-Catatan penting: `--period week` di codeburn tidak konsisten antar-perintah (laporan semua tool
-dan laporan per provider memakai rentang berbeda). Collector selalu memakai `--from` dan `--to`
-eksplisit.
+Dua kelemahan codeburn 0.9.25 yang ditemukan saat uji coba, dan cara collector menghindarinya:
+
+- `--period week` tidak konsisten antar-perintah. Collector selalu memakai `--from` dan `--to` eksplisit.
+- `codeburn report` tanpa `--provider` (semua tool) bisa kehilangan hari utuh. Pada uji 2026-10-07
+  laporan gabungan hanya memuat 16 dari 24 hari aktif ($405 dari $992); `sessions` dan
+  `report --provider <tool>` memuat semuanya. Collector mengambil sesi dari `sessions`, dan
+  ringkasan harian dari `report --provider` untuk tiap tool lalu menjumlahkannya.
+
+Karena itu angka di dashboard codeburn milik member bisa lebih kecil dari angka manaflow.
+
+Yang sengaja dibuang collector sebelum kirim: nama branch, tautan PR, dan path lokal project.
+Rincian sesi diringkas menjadi per hari + kategori task + model.
 
 ## 6. Collector
 
@@ -176,9 +185,9 @@ Kewajiban lisensi: sertakan notice MIT codeburn di repo ini.
 
 ## 11. Urutan pengerjaan
 
-1. Kerangka repo: `collector/`, `server/`, `dashboard/`, README, `.gitignore`, notice MIT.
-2. Skema D1 dan API server: terima kiriman, token per member.
-3. Collector: jalankan codeburn, kirim perubahan, simpan token.
+1. ✅ Kerangka repo: `collector/`, `server/`, `dashboard/`, README, `.gitignore`, notice MIT.
+2. ✅ Skema D1 dan API server: terima kiriman, token per member. Teruji lokal; belum di-deploy.
+3. ✅ Collector: `login`, `push`, `status`, `uninstall`. Teruji ujung-ke-ujung dengan server lokal.
 4. Pemasang jadwal untuk Windows, macOS, Linux.
 5. Dashboard.
 6. Halaman admin.

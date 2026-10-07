@@ -5,7 +5,18 @@ metadata sesi (bukan isi prompt) ke satu server tiap 30 menit; lead melihatnya d
 
 Dibangun di atas [codeburn](https://github.com/getagentseal/codeburn).
 
-Status: kerangka awal. Belum ada bagian yang berfungsi.
+Status: collector dan API penerima sudah berjalan dan teruji di lokal. Belum di-deploy;
+jadwal otomatis dan dashboard belum ada.
+
+## Coba di lokal
+
+```bash
+npm install && npm test                 # collector
+cd server && npm install && npm test    # server
+```
+
+Uji ujung-ke-ujung: lihat [server/README.md](server/README.md) untuk menjalankan server lokal,
+lalu `manaflow login --server http://127.0.0.1:8787` dan `manaflow push`.
 
 ## Dokumen
 
