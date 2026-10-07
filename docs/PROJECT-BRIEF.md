@@ -182,6 +182,10 @@ menyusul di kiriman berikutnya. Sebelum dikirim dibuang: nama branch, tautan PR,
 path folder lokal (nama file dan nama project tetap). Pohon Context hanya berisi jumlah token per
 jenis blok dan per tool, bukan isi percakapan.
 
+Periode: halaman tim memakai Today, 7 hari, 30 hari, Bulan ini, 90 hari; halaman per member
+memakai periode codeburn (Today, 7 days, 30 days, Month, 6 months, Lifetime). Di halaman Context,
+tombol periode menyaring daftar sesi menurut waktu terakhir aktif.
+
 Tampilan minimum ringkasan tim:
 
 - Ringkasan tim untuk periode yang dipilih.

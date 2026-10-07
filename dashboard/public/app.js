@@ -2,14 +2,22 @@ import { brand, dateTime, h } from './dom.js'
 
 const TOKEN_KEY = 'manaflow.token'
 const SVG_NS = 'http://www.w3.org/2000/svg'
-const PERIODS = [7, 30, 90]
+// The same windows as the per-member view, plus 90 days (how long data is kept).
+// `days` counts back from today; `month` is the calendar month so far.
+const PERIODS = [
+  { key: 'today', label: 'Today', days: 1 },
+  { key: 'week', label: '7 hari', days: 7 },
+  { key: '30days', label: '30 hari', days: 30 },
+  { key: 'month', label: 'Bulan ini' },
+  { key: '90days', label: '90 hari', days: 90 },
+]
 
 const app = document.getElementById('app')
 const tooltip = document.getElementById('tooltip')
 
 const state = {
   token: localStorage.getItem(TOKEN_KEY) ?? '',
-  days: 30,
+  period: '30days',
   position: '',
   memberId: null,
   sort: 'cost',
@@ -43,7 +51,9 @@ function duration(ms) {
 function range() {
   const to = new Date()
   const from = new Date()
-  from.setDate(from.getDate() - (state.days - 1))
+  const { days } = PERIODS.find((period) => period.key === state.period)
+  if (days) from.setDate(from.getDate() - (days - 1))
+  else from.setDate(1)
   return { from: localDay(from), to: localDay(to) }
 }
 
@@ -562,8 +572,8 @@ function dashboardView() {
       h(
         'div',
         { class: 'seg', role: 'group', 'aria-label': 'Periode' },
-        PERIODS.map((days) =>
-          h('button', { 'aria-pressed': String(state.days === days), onclick: () => { state.days = days; load() } }, `${days} hari`),
+        PERIODS.map((period) =>
+          h('button', { 'aria-pressed': String(state.period === period.key), onclick: () => { state.period = period.key; load() } }, period.label),
         ),
       ),
       h(

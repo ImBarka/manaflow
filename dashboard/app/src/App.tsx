@@ -334,6 +334,20 @@ function initialDevice(): string {
   return new URLSearchParams(location.search).get('device') ?? ''
 }
 
+// When a period begins, for filtering sessions by their last activity. The
+// Usage figures are windowed on the member's laptop; this is the same window
+// applied in the viewer's time zone.
+function periodStart(period: Period, now = new Date()): number {
+  const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const daysAgo = (days: number) => new Date(midnight.getFullYear(), midnight.getMonth(), midnight.getDate() - days).getTime()
+  if (period === 'today') return midnight.getTime()
+  if (period === 'week') return daysAgo(6)
+  if (period === '30days') return daysAgo(29)
+  if (period === 'month') return new Date(now.getFullYear(), now.getMonth(), 1).getTime()
+  if (period === 'all') return new Date(now.getFullYear(), now.getMonth() - 6, now.getDate()).getTime()
+  return 0
+}
+
 function fmtUpdated(iso?: string): string {
   if (!iso) return ''
   return new Date(iso).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' })
@@ -443,8 +457,6 @@ export function App() {
 
           {/* All widths: min-w-0 + overflow-x-auto contain mid-width overflow. Below md: full-width second row so ~390px isn't a ~22px clip. */}
           <div className="ml-auto flex min-w-0 items-center gap-2 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden max-md:ml-0 max-md:w-full max-md:basis-full">
-            {page === 'usage' && (
-            <>
             <div className="flex shrink-0 rounded-md border border-border bg-interactive-secondary p-0.5">
               {PERIODS.map((p) => (
                 <button
@@ -460,6 +472,7 @@ export function App() {
                 </button>
               ))}
             </div>
+            {page === 'usage' && (
             <div className="flex shrink-0 rounded-md border border-border bg-interactive-secondary p-0.5">
               {(['cost', 'tokens'] as Unit[]).map((u) => (
                 <button
@@ -475,7 +488,6 @@ export function App() {
                 </button>
               ))}
             </div>
-            </>
             )}
             <ThemeToggle />
           </div>
@@ -551,7 +563,7 @@ export function App() {
             {page === 'usage' && <IndexingNotice payload={payload} />}
 
             {page === 'context' ? (
-              <ContextExplorer deviceId={deviceId} />
+              <ContextExplorer deviceId={deviceId} since={periodStart(period)} />
             ) : data === null ? (
               <div className="text-sm text-tertiary-foreground">Belum ada data Usage untuk periode ini dari device ini.</div>
             ) : (

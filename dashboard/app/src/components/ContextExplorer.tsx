@@ -173,7 +173,7 @@ function SessionRow({ s, open, onToggle }: { s: ContextSessionInfo; open: boolea
   )
 }
 
-export function ContextExplorer({ deviceId }: { deviceId: string }) {
+export function ContextExplorer({ deviceId, since }: { deviceId: string; since: number }) {
   const [provider, setProvider] = useState<ContextProvider>('claude')
   const [openId, setOpenId] = useState<string | null>(null)
 
@@ -183,6 +183,9 @@ export function ContextExplorer({ deviceId }: { deviceId: string }) {
     enabled: deviceId !== '',
     staleTime: 30_000,
   })
+
+  // Sessions last active inside the selected period.
+  const sessions = data?.filter((s) => s.mtimeMs >= since)
 
   return (
     <DeviceId.Provider value={deviceId}>
@@ -205,7 +208,9 @@ export function ContextExplorer({ deviceId }: { deviceId: string }) {
             {p.label}
           </button>
         ))}
-        <span className="ml-auto text-xs text-tertiary-foreground">what fills each session’s context window, block by block</span>
+        <span className="ml-auto text-xs text-tertiary-foreground">
+          {sessions ? `${sessions.length} sessions · ` : ''}what fills each session’s context window, block by block
+        </span>
       </div>
 
       <Card className="overflow-hidden">
@@ -217,8 +222,12 @@ export function ContextExplorer({ deviceId }: { deviceId: string }) {
           </div>
         )}
         {isError && <p className="px-4 py-6 text-sm text-tertiary-foreground">Failed to load sessions: {String((error as Error)?.message)}</p>}
-        {data && data.length === 0 && <p className="px-4 py-6 text-sm text-tertiary-foreground">No sessions found for this provider.</p>}
-        {data?.map((s) => (
+        {sessions && sessions.length === 0 && (
+          <p className="px-4 py-6 text-sm text-tertiary-foreground">
+            {data && data.length > 0 ? 'No sessions in this period. Pick a longer one above.' : 'No sessions found for this provider.'}
+          </p>
+        )}
+        {sessions?.map((s) => (
           <SessionRow key={s.sessionId} s={s} open={openId === s.sessionId} onToggle={() => setOpenId(openId === s.sessionId ? null : s.sessionId)} />
         ))}
       </Card>
