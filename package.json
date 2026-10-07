@@ -1,0 +1,21 @@
+{
+  "name": "manaflow",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Team AI coding usage collector and dashboard, built on codeburn",
+  "type": "module",
+  "bin": {
+    "manaflow": "collector/cli.js"
+  },
+  "files": [
+    "collector",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "dependencies": {
+    "codeburn": "0.9.25"
+  },
+  "license": "UNLICENSED"
+}
