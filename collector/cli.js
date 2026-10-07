@@ -1,15 +1,18 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs'
 
-import { UserError, login, push, status, uninstall } from './commands.js'
+import { login, push, schedule, status, uninstall } from './commands.js'
+import { appendLog } from './config.js'
+import { UserError } from './errors.js'
 
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 
 const COMMANDS = {
-  login: [login, 'Simpan token member (opsi: --server <url> --token <token> --name <nama device>)'],
+  login: [login, 'Simpan token member dan pasang jadwal (opsi: --server <url> --token <token> --name <device> --no-schedule)'],
   push: [push, 'Kirim data pemakaian ke server sekarang'],
-  status: [status, 'Tampilkan status login dan kiriman terakhir'],
-  uninstall: [uninstall, 'Hapus token dan state dari laptop ini'],
+  status: [status, 'Tampilkan status login, jadwal, dan kiriman terakhir'],
+  schedule: [schedule, 'Pasang atau lepas jadwal otomatis: schedule on|off'],
+  uninstall: [uninstall, 'Lepas jadwal, hapus token dan state dari laptop ini'],
 }
 
 function help() {
@@ -18,6 +21,12 @@ function help() {
 }
 
 const [command, ...args] = process.argv.slice(2)
+// --log is passed by the scheduled run, which has no terminal to print to.
+const logging = args.includes('--log')
+const out = (text) => {
+  process.stdout.write(text)
+  if (logging) appendLog(text)
+}
 
 if (!command || command === '--help' || command === '-h') {
   process.stdout.write(help())
@@ -25,8 +34,9 @@ if (!command || command === '--help' || command === '-h') {
   process.stdout.write(`${version}\n`)
 } else if (command in COMMANDS) {
   try {
-    await COMMANDS[command][0](args, { version })
+    await COMMANDS[command][0](args, { version, out })
   } catch (err) {
+    if (logging) appendLog(`ERROR ${err.message}`)
     if (!(err instanceof UserError)) throw err
     process.stderr.write(`manaflow: ${err.message}\n`)
     process.exitCode = 1

@@ -4,7 +4,9 @@ import { createInterface } from 'node:readline/promises'
 
 import { collect, collectionWindow } from './codeburn.js'
 import { configDir, loadConfig, loadState, removeAll, saveConfig, saveState } from './config.js'
+import { UserError } from './errors.js'
 import { MAX_SESSIONS_PER_REQUEST, chunk, dayKey, diff, sessionKey, toDay, toSession } from './payload.js'
+import { INTERVAL_MINUTES, installSchedule, removeSchedule, scheduleInstalled, schedulerLabel } from './schedule.js'
 
 // Claude Code keeps session files for 30 days; a few extra days cover late pushes.
 const WINDOW_DAYS = 35
@@ -20,8 +22,6 @@ Manaflow mengirim data pemakaian AI coding dari laptop ini ke dashboard tim.
 
 Judul sesi dan nama project ikut terkirim apa adanya.
 `
-
-export class UserError extends Error {}
 
 function flag(args, name) {
   const index = args.indexOf(name)
@@ -64,12 +64,12 @@ function device(config) {
   return { id: config.deviceId, name: config.deviceName, os: platform(), version: config.version }
 }
 
-export async function login(args, { version }) {
+export async function login(args, { version, out }) {
   const previous = loadConfig()
   let serverUrl = flag(args, '--server')
   let token = flag(args, '--token') ?? process.env.MANAFLOW_TOKEN
 
-  process.stdout.write(NOTICE)
+  out(NOTICE)
   if (!serverUrl || !token) {
     const rl = createInterface({ input: process.stdin, output: process.stdout })
     try {
@@ -93,10 +93,17 @@ export async function login(args, { version }) {
   // Registers the device and proves the token works before anything is saved.
   await post(config, { device: device(config) })
   saveConfig(config)
-  process.stdout.write(`\nLogin berhasil. Device: ${config.deviceName}\nJalankan \`manaflow push\` untuk kiriman pertama.\n`)
+  out(`\nLogin berhasil. Device: ${config.deviceName}\n`)
+  if (args.includes('--no-schedule')) {
+    out('Jadwal otomatis tidak dipasang. Kirim manual dengan `manaflow push`.\n')
+  } else {
+    installSchedule()
+    out(`Jadwal otomatis terpasang (${schedulerLabel()}): kirim tiap ${INTERVAL_MINUTES} menit.\n`)
+  }
+  out('Jalankan `manaflow push` untuk kiriman pertama.\n')
 }
 
-export async function push(_args, { version }) {
+export async function push(_args, { version, out }) {
   const config = loadConfig()
   if (!config) throw new UserError('Belum login. Jalankan `manaflow login`.')
   config.version = version
@@ -123,32 +130,48 @@ export async function push(_args, { version }) {
     saveState({ sent, lastPush: batches.length ? new Date().toISOString() : state.lastPush })
   }
 
-  process.stdout.write(
+  out(
     `Terkirim: ${changedSessions.length} sesi, ${changedDays.length} hari` +
       (rejected ? ` (${rejected} ditolak server)` : '') +
       `. Tidak berubah: ${collected.sessions.length - changedSessions.length} sesi.\n`,
   )
 }
 
-export async function status() {
+export async function status(_args, { out }) {
   const config = loadConfig()
   if (!config) {
-    process.stdout.write('Belum login.\n')
+    out('Belum login.\n')
     return
   }
   const state = loadState()
   const sessions = Object.keys(state.sent).filter((key) => key.startsWith('s:')).length
-  process.stdout.write(
+  const scheduled = scheduleInstalled() ? `aktif, tiap ${INTERVAL_MINUTES} menit (${schedulerLabel()})` : 'tidak terpasang'
+  out(
     `Server        : ${config.serverUrl}\n` +
       `Device        : ${config.deviceName} (${config.deviceId})\n` +
       `Token         : ${config.token.slice(0, 6)}…\n` +
       `Kiriman akhir : ${state.lastPush ?? 'belum pernah'}\n` +
       `Sesi terlacak : ${sessions}\n` +
+      `Jadwal        : ${scheduled}\n` +
       `Folder config : ${configDir()}\n`,
   )
 }
 
-export async function uninstall() {
+export async function schedule(args, { out }) {
+  const [action] = args
+  if (action === 'on') {
+    installSchedule()
+    out(`Jadwal otomatis terpasang (${schedulerLabel()}): kirim tiap ${INTERVAL_MINUTES} menit.\n`)
+  } else if (action === 'off') {
+    removeSchedule()
+    out('Jadwal otomatis dilepas.\n')
+  } else {
+    throw new UserError('Pemakaian: manaflow schedule on|off')
+  }
+}
+
+export async function uninstall(_args, { out }) {
+  removeSchedule()
   removeAll()
-  process.stdout.write(`Token dan state dihapus dari ${configDir()}.\nData yang sudah terkirim tetap ada di server.\n`)
+  out(`Jadwal dilepas; token dan state dihapus dari ${configDir()}.\nData yang sudah terkirim tetap ada di server.\n`)
 }

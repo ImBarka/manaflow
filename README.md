@@ -5,8 +5,8 @@ metadata sesi (bukan isi prompt) ke satu server tiap 30 menit; lead melihatnya d
 
 Dibangun di atas [codeburn](https://github.com/getagentseal/codeburn).
 
-Status: collector dan API penerima sudah berjalan dan teruji di lokal. Belum di-deploy;
-jadwal otomatis dan dashboard belum ada.
+Status: collector, jadwal otomatis, dan API penerima sudah berjalan dan teruji di lokal
+(jadwal baru teruji di Windows). Belum di-deploy; dashboard belum ada.
 
 ## Coba di lokal
 

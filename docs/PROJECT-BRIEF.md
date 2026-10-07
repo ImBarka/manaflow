@@ -110,9 +110,15 @@ Rincian sesi diringkas menjadi per hari + kategori task + model.
 ## 6. Collector
 
 - Perintah: `manaflow login` (tempel token), `manaflow push` (kirim sekarang),
-  `manaflow status`, `manaflow uninstall`.
+  `manaflow status`, `manaflow schedule on|off`, `manaflow uninstall`.
 - `login` menampilkan ringkasan data yang dikirim dan tidak dikirim, lalu memasang jadwal:
-  Task Scheduler di Windows, launchd di macOS, systemd timer atau cron di Linux.
+  Task Scheduler di Windows, launchd di macOS, systemd timer (atau cron bila systemd tidak ada) di Linux.
+- Jadwal Windows didaftarkan lewat XML supaya tetap jalan saat laptop memakai baterai, dan
+  dijalankan lewat `conhost --headless` supaya tidak memunculkan jendela tiap 30 menit.
+- Kiriman terjadwal mencatat satu baris per jalan ke `push.log` di folder config
+  (`~/.config/manaflow/`), karena tidak ada terminal untuk menampilkan hasilnya.
+- Jadwal menyimpan path Node dan path instalasi saat itu. Bila Node diganti versi lewat nvm atau
+  manaflow dipindah, jalankan `manaflow schedule on` lagi.
 - Tidak ada proses yang hidup terus. Tiap 30 menit collector jalan, mengirim, lalu selesai.
 - Kiriman bersifat idempoten: server menyimpan dengan kunci (member, device, id sesi), jadi
   kiriman ulang tidak menggandakan data.
@@ -188,7 +194,8 @@ Kewajiban lisensi: sertakan notice MIT codeburn di repo ini.
 1. ✅ Kerangka repo: `collector/`, `server/`, `dashboard/`, README, `.gitignore`, notice MIT.
 2. ✅ Skema D1 dan API server: terima kiriman, token per member. Teruji lokal; belum di-deploy.
 3. ✅ Collector: `login`, `push`, `status`, `uninstall`. Teruji ujung-ke-ujung dengan server lokal.
-4. Pemasang jadwal untuk Windows, macOS, Linux.
+4. ✅ Pemasang jadwal. Windows teruji di mesin nyata; macOS dan Linux baru teruji sebatas isi
+   file yang dihasilkan, belum pernah dijalankan di mesin sungguhan.
 5. Dashboard.
 6. Halaman admin.
 7. Uji dengan dua laptop pemilik proyek, lalu 27 member.
