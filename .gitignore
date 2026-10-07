@@ -6,3 +6,7 @@ dist/
 .env.*
 *.log
 .DS_Store
+.admin-token
+.dashboard-token
+docs/list_karyawan.md
+.member-tokens.csv

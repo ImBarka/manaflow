@@ -192,11 +192,14 @@ Kewajiban lisensi: sertakan notice MIT codeburn di repo ini.
 ## 11. Urutan pengerjaan
 
 1. ✅ Kerangka repo: `collector/`, `server/`, `dashboard/`, README, `.gitignore`, notice MIT.
-2. ✅ Skema D1 dan API server: terima kiriman, token per member. Teruji lokal; belum di-deploy.
+2. ✅ Skema D1 dan API server: terima kiriman, token per member. Ter-deploy 2026-10-07 di
+   https://manaflow.manaflow-server.workers.dev (D1 region APAC).
 3. ✅ Collector: `login`, `push`, `status`, `uninstall`. Teruji ujung-ke-ujung dengan server lokal.
 4. ✅ Pemasang jadwal. Windows teruji di mesin nyata; macOS dan Linux baru teruji sebatas isi
    file yang dihasilkan, belum pernah dijalankan di mesin sungguhan.
-5. Dashboard.
+5. ✅ Dashboard: ringkasan tim, tren harian, per model, per tool, tabel member, rincian member
+   (per model, kategori, tool, device, daftar sesi). Teruji di lokal dengan data asli satu laptop;
+   belum pernah diuji dengan banyak member.
 6. Halaman admin.
 7. Uji dengan dua laptop pemilik proyek, lalu 27 member.
 

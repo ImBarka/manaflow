@@ -20,10 +20,10 @@ function bearer(request) {
   return header.startsWith('Bearer ') ? header.slice(7).trim() : ''
 }
 
-function newToken() {
+function newToken(prefix) {
   const bytes = crypto.getRandomValues(new Uint8Array(32))
   const b64 = btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
-  return `mf_${b64}`
+  return `${prefix}_${b64}`
 }
 
 async function readJson(request) {
@@ -65,7 +65,7 @@ async function createMember(request, env) {
   if (!name) return json(400, { error: 'name is required' })
   const team = str(body.team, 80).trim()
 
-  const token = newToken()
+  const token = newToken('mf')
   const row = await env.DB.prepare(
     'INSERT INTO members (name, team, token_hash, created_at) VALUES (?, ?, ?, ?) RETURNING id',
   )
@@ -73,6 +73,102 @@ async function createMember(request, env) {
     .first()
   // The token is returned once and never stored in clear.
   return json(201, { id: row.id, name, team, token })
+}
+
+async function createViewer(request, env) {
+  if (!(await isAdmin(request, env))) return json(401, { error: 'unauthorized' })
+  const body = await readJson(request)
+  const name = str(body?.name, 80).trim()
+  if (!name) return json(400, { error: 'name is required' })
+
+  const token = newToken('mfv')
+  const row = await env.DB.prepare('INSERT INTO viewers (name, token_hash, created_at) VALUES (?, ?, ?) RETURNING id')
+    .bind(name, await sha256Hex(token), new Date().toISOString())
+    .first()
+  return json(201, { id: row.id, name, token })
+}
+
+async function isViewer(request, env) {
+  const token = bearer(request)
+  if (!token) return false
+  const viewer = await env.DB.prepare('SELECT id FROM viewers WHERE token_hash = ? AND revoked_at IS NULL')
+    .bind(await sha256Hex(token))
+    .first()
+  return Boolean(viewer)
+}
+
+function isoDay(date) {
+  return date.toISOString().slice(0, 10)
+}
+
+function dayRange(url) {
+  const to = url.searchParams.get('to') ?? isoDay(new Date())
+  const from = url.searchParams.get('from') ?? isoDay(new Date(Date.now() - 29 * 86_400_000))
+  return DAY.test(from) && DAY.test(to) && from <= to ? { from, to } : null
+}
+
+// A session belongs to a range when one of its per-day segments falls in it.
+const IN_RANGE = `EXISTS (SELECT 1 FROM json_each(s.segments) seg WHERE json_extract(seg.value, '$.day') BETWEEN ? AND ?)`
+
+async function dashboard(request, env, url) {
+  if (!(await isViewer(request, env))) return json(401, { error: 'unauthorized' })
+  const range = dayRange(url)
+  if (!range) return json(400, { error: 'from and to must be YYYY-MM-DD, from <= to' })
+  const { from, to } = range
+
+  const [members, devices, daily, usage, sessions] = await env.DB.batch([
+    env.DB.prepare('SELECT id, name, team, revoked_at IS NOT NULL AS revoked FROM members'),
+    env.DB.prepare('SELECT id, member_id AS memberId, name, os, collector_version AS version, last_seen AS lastSeen FROM devices'),
+    env.DB.prepare(
+      `SELECT day, member_id AS memberId, device_id AS deviceId, cost, calls, turns,
+              edit_turns AS editTurns, one_shot_turns AS oneShotTurns
+       FROM daily WHERE day BETWEEN ? AND ?`,
+    ).bind(from, to),
+    env.DB.prepare(
+      `SELECT s.member_id AS memberId, s.device_id AS deviceId, s.provider,
+              json_extract(seg.value, '$.category') AS category, m.key AS model,
+              SUM(json_extract(m.value, '$.cost')) AS cost, SUM(json_extract(m.value, '$.calls')) AS calls,
+              SUM(json_extract(m.value, '$.inputTokens')) AS inputTokens,
+              SUM(json_extract(m.value, '$.outputTokens')) AS outputTokens
+       FROM sessions s, json_each(s.segments) seg, json_each(json_extract(seg.value, '$.models')) m
+       WHERE json_extract(seg.value, '$.day') BETWEEN ? AND ?
+       GROUP BY 1, 2, 3, 4, 5`,
+    ).bind(from, to),
+    env.DB.prepare(
+      `SELECT s.member_id AS memberId, s.device_id AS deviceId, COUNT(*) AS sessions,
+              SUM(s.input_tokens) AS inputTokens, SUM(s.cache_read_tokens) AS cacheReadTokens,
+              SUM(s.cache_write_tokens) AS cacheWriteTokens
+       FROM sessions s WHERE ${IN_RANGE} GROUP BY 1, 2`,
+    ).bind(from, to),
+  ])
+  return json(200, {
+    from,
+    to,
+    members: members.results,
+    devices: devices.results,
+    daily: daily.results,
+    usage: usage.results,
+    sessions: sessions.results,
+  })
+}
+
+async function memberSessions(request, env, url) {
+  if (!(await isViewer(request, env))) return json(401, { error: 'unauthorized' })
+  const range = dayRange(url)
+  const memberId = Number(url.searchParams.get('member'))
+  if (!range || !Number.isInteger(memberId)) return json(400, { error: 'member, from and to are required' })
+
+  const rows = await env.DB.prepare(
+    `SELECT s.provider, s.session_id AS sessionId, s.device_id AS deviceId, s.title, s.project, s.models, s.cost,
+            s.calls, s.turns, s.input_tokens AS inputTokens, s.output_tokens AS outputTokens,
+            s.cache_read_tokens AS cacheReadTokens, s.cache_write_tokens AS cacheWriteTokens,
+            s.started_at AS startedAt, s.ended_at AS endedAt, s.duration_ms AS durationMs
+     FROM sessions s WHERE s.member_id = ? AND ${IN_RANGE}
+     ORDER BY s.started_at DESC LIMIT 500`,
+  )
+    .bind(memberId, range.from, range.to)
+    .all()
+  return json(200, { sessions: rows.results.map((row) => ({ ...row, models: JSON.parse(row.models) })) })
 }
 
 function sessionStatement(db, memberId, deviceId, s, now) {
@@ -179,10 +275,14 @@ async function ingest(request, env) {
 
 export default {
   async fetch(request, env) {
-    const { pathname } = new URL(request.url)
-    if (request.method === 'GET' && pathname === '/v1/health') return json(200, { ok: true })
-    if (request.method === 'POST' && pathname === '/v1/ingest') return ingest(request, env)
-    if (request.method === 'POST' && pathname === '/v1/admin/members') return createMember(request, env)
+    const url = new URL(request.url)
+    const route = `${request.method} ${url.pathname}`
+    if (route === 'GET /v1/health') return json(200, { ok: true })
+    if (route === 'POST /v1/ingest') return ingest(request, env)
+    if (route === 'GET /v1/dashboard') return dashboard(request, env, url)
+    if (route === 'GET /v1/sessions') return memberSessions(request, env, url)
+    if (route === 'POST /v1/admin/members') return createMember(request, env)
+    if (route === 'POST /v1/admin/viewers') return createViewer(request, env)
     return json(404, { error: 'not found' })
   },
 }

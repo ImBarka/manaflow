@@ -1,6 +1,6 @@
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { getPlatformProxy } from 'wrangler'
 
@@ -16,9 +16,12 @@ let env
 before(async () => {
   proxy = await getPlatformProxy({ configPath: fileURLToPath(new URL('../wrangler.toml', import.meta.url)), persist: false })
   env = { ...proxy.env, ADMIN_TOKEN }
-  const sql = readFileSync(new URL('../migrations/0001_init.sql', import.meta.url), 'utf8')
-  const statements = sql.replace(/^--.*$/gm, '').split(';').map((s) => s.trim()).filter(Boolean)
-  for (const statement of statements) await env.DB.prepare(statement).run()
+  const dir = new URL('../migrations/', import.meta.url)
+  for (const file of readdirSync(dir).sort()) {
+    const sql = readFileSync(new URL(file, dir), 'utf8')
+    const statements = sql.replace(/^--.*$/gm, '').split(';').map((s) => s.trim()).filter(Boolean)
+    for (const statement of statements) await env.DB.prepare(statement).run()
+  }
 })
 
 after(async () => {
@@ -137,4 +140,63 @@ test('a session without an id is rejected but the rest of the batch is kept', as
     body: { device, sessions: [session({ sessionId: '' }), session({ sessionId: 'ok' })] },
   })
   assert.deepEqual(await res.json(), { accepted: 1, rejected: 1 })
+})
+
+async function createViewer(name) {
+  const res = await call('POST', '/v1/admin/viewers', { token: ADMIN_TOKEN, body: { name } })
+  assert.equal(res.status, 201)
+  return res.json()
+}
+
+test('dashboard and sessions reject a member token and a missing token', async () => {
+  const member = await createMember('NotAViewer')
+  assert.equal((await call('GET', '/v1/dashboard')).status, 401)
+  assert.equal((await call('GET', '/v1/dashboard', { token: member.token })).status, 401)
+  assert.equal((await call('GET', '/v1/sessions?member=1', { token: member.token })).status, 401)
+})
+
+test('dashboard aggregates usage per member, model and category inside the range', async () => {
+  const member = await createMember('Dewi')
+  const viewer = await createViewer('Lead')
+  const device = { id: '55555555-5555-4555-8555-555555555555', name: 'LAPTOP-E', os: 'darwin', version: '0.1.0' }
+  const sessions = [
+    session({
+      sessionId: 'in-range',
+      segments: [
+        { day: '2026-08-10', category: 'coding', models: { 'Opus 5': { cost: 2, calls: 4, inputTokens: 10, outputTokens: 20 } } },
+        { day: '2026-08-11', category: 'coding', models: { 'Opus 5': { cost: 1, calls: 1, inputTokens: 5, outputTokens: 5 }, 'Sonnet 5.5': { cost: 0.5, calls: 2, inputTokens: 1, outputTokens: 1 } } },
+      ],
+    }),
+    session({ sessionId: 'out-of-range', segments: [{ day: '2026-07-01', category: 'coding', models: { 'Opus 5': { cost: 99, calls: 9, inputTokens: 0, outputTokens: 0 } } }] }),
+  ]
+  const daily = [
+    { day: '2026-08-10', cost: 2, calls: 4, turns: 2, editTurns: 2, oneShotTurns: 1 },
+    { day: '2026-07-01', cost: 99, calls: 9, turns: 1, editTurns: 0, oneShotTurns: 0 },
+  ]
+  assert.equal((await call('POST', '/v1/ingest', { token: member.token, body: { device, sessions, daily } })).status, 200)
+
+  const res = await call('GET', '/v1/dashboard?from=2026-08-01&to=2026-08-31', { token: viewer.token })
+  assert.equal(res.status, 200)
+  const data = await res.json()
+
+  const usage = data.usage.filter((u) => u.memberId === member.id)
+  const opus = usage.find((u) => u.model === 'Opus 5')
+  assert.deepEqual({ cost: opus.cost, calls: opus.calls, provider: opus.provider, category: opus.category }, { cost: 3, calls: 5, provider: 'claude', category: 'coding' })
+  assert.equal(usage.find((u) => u.model === 'Sonnet 5.5').cost, 0.5)
+
+  assert.deepEqual(data.daily.filter((d) => d.memberId === member.id).map((d) => d.day), ['2026-08-10'])
+  assert.equal(data.sessions.find((s) => s.memberId === member.id).sessions, 1)
+  assert.ok(data.members.some((m) => m.id === member.id && m.name === 'Dewi'))
+  assert.ok(data.devices.some((d) => d.id === device.id && d.name === 'LAPTOP-E'))
+
+  const list = await call('GET', `/v1/sessions?member=${member.id}&from=2026-08-01&to=2026-08-31`, { token: viewer.token })
+  const rows = (await list.json()).sessions
+  assert.deepEqual(rows.map((r) => r.sessionId), ['in-range'])
+  assert.deepEqual(rows[0].models, ['Opus 5'])
+})
+
+test('dashboard rejects a malformed range', async () => {
+  const viewer = await createViewer('Lead 2')
+  assert.equal((await call('GET', '/v1/dashboard?from=yesterday&to=2026-08-31', { token: viewer.token })).status, 400)
+  assert.equal((await call('GET', '/v1/dashboard?from=2026-09-01&to=2026-08-31', { token: viewer.token })).status, 400)
 })
