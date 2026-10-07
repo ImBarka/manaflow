@@ -6,8 +6,11 @@ import { createHash } from 'node:crypto'
 export const FAST_PERIODS = ['today', 'week']
 export const SLOW_PERIODS = ['30days', 'month', 'all', 'lifetime']
 export const SLOW_REFRESH_MS = 6 * 60 * 60 * 1000
-// Building a context tree re-reads a whole transcript, so cap the work per run.
-export const MAX_CONTEXT_TREES_PER_PUSH = 6
+// Building a context tree re-reads a whole transcript (a few seconds each), so
+// a run spends a bounded time on them and the backlog drains over several runs.
+export const CONTEXT_BUDGET_MS = 45_000
+// What the server accepts in one request.
+export const CONTEXT_BATCH = 20
 
 function baseName(path) {
   return String(path ?? '').split(/[\\/]/).filter(Boolean).at(-1) ?? ''
@@ -68,8 +71,24 @@ export function historyIsStale(payload, daily) {
   })
 }
 
-export function changedContextSessions(listed, sentMtimes, provider) {
-  return listed
-    .filter((session) => sentMtimes[`${provider}:${session.sessionId}`] !== session.mtimeMs)
-    .sort((a, b) => b.mtimeMs - a.mtimeMs)
+const CONTEXT_PROVIDERS = new Set(['claude', 'codex'])
+
+export function contextKey(session) {
+  return `${session.provider}:${session.sessionId}`
+}
+
+// A session's tree only changes when the session does.
+export function contextMarker(session) {
+  return `${session.endedAt}|${session.calls}`
+}
+
+// Every session codeburn can build a tree for whose tree is missing or out of
+// date on the server, newest first. `sessions` are codeburn session rows, so
+// this covers the whole collection window rather than the few recent sessions
+// `codeburn context --list` offers.
+export function pendingContextSessions(sessions, sentMarkers) {
+  return sessions
+    .filter((session) => CONTEXT_PROVIDERS.has(session.provider))
+    .filter((session) => sentMarkers[contextKey(session)] !== contextMarker(session))
+    .sort((a, b) => String(b.endedAt).localeCompare(String(a.endedAt)))
 }

@@ -3,10 +3,12 @@ import assert from 'node:assert/strict'
 
 import {
   SLOW_REFRESH_MS,
-  changedContextSessions,
+  contextKey,
+  contextMarker,
   duePeriods,
   historyIsStale,
   payloadFingerprint,
+  pendingContextSessions,
   stripContextTree,
   stripUsagePayload,
 } from '../usage.js'
@@ -76,12 +78,14 @@ test('a day missing from or disagreeing with the payload history marks the cache
   assert.equal(historyIsStale(payload, [...fresh, { date: '2026-09-29', cost: 0 }]), false)
 })
 
-test('only context sessions whose transcript changed are rebuilt, newest first', () => {
-  const listed = [
-    { sessionId: 'a', mtimeMs: 1 },
-    { sessionId: 'b', mtimeMs: 5 },
-    { sessionId: 'c', mtimeMs: 3 },
+test('every claude and codex session without an up-to-date tree is pending, newest first', () => {
+  const sessions = [
+    { provider: 'claude', sessionId: 'a', endedAt: '2026-10-01T00:00:00Z', calls: 5 },
+    { provider: 'claude', sessionId: 'b', endedAt: '2026-10-05T00:00:00Z', calls: 9 },
+    { provider: 'codex', sessionId: 'c', endedAt: '2026-10-03T00:00:00Z', calls: 2 },
+    { provider: 'antigravity', sessionId: 'd', endedAt: '2026-10-06T00:00:00Z', calls: 1 },
   ]
-  const changed = changedContextSessions(listed, { 'claude:a': 1, 'claude:b': 4 }, 'claude')
-  assert.deepEqual(changed.map((s) => s.sessionId), ['b', 'c'])
+  const markers = { [contextKey(sessions[0])]: contextMarker(sessions[0]), [contextKey(sessions[1])]: '2026-10-04T00:00:00Z|7' }
+  assert.deepEqual(pendingContextSessions(sessions, markers).map((s) => s.sessionId), ['b', 'c'])
+  assert.deepEqual(pendingContextSessions(sessions, {}).map((s) => s.sessionId), ['b', 'c', 'a'])
 })

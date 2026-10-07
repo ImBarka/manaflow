@@ -14,7 +14,8 @@ Cloudflare Worker (API) dan skema D1.
 | POST | `/v1/admin/members` | `ADMIN_TOKEN` | Buat member; token dikembalikan sekali saja |
 | POST | `/v1/admin/members/:id` | `ADMIN_TOKEN` | Ubah nama dan tim |
 | POST | `/v1/admin/members/:id/revoke` | `ADMIN_TOKEN` | Cabut token; data lama tetap ada |
-| POST | `/v1/admin/members/:id/token` | `ADMIN_TOKEN` | Token baru; token lama langsung tidak berlaku |
+| POST | `/v1/admin/members/:id/extra-token` | `ADMIN_TOKEN` | Token tambahan untuk laptop kedua; token yang sudah ada tetap berlaku |
+| POST | `/v1/admin/members/:id/token` | `ADMIN_TOKEN` | Ganti token; semua token lama member itu langsung tidak berlaku |
 | GET | `/v1/admin/viewers` | `ADMIN_TOKEN` | Daftar pemegang akses dashboard |
 | POST | `/v1/admin/viewers` | `ADMIN_TOKEN` | Buat pemegang akses dashboard; token dikembalikan sekali saja |
 | POST | `/v1/admin/viewers/:id/revoke` | `ADMIN_TOKEN` | Cabut akses dashboard |

@@ -8,7 +8,7 @@ import { UserError } from './errors.js'
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 
 const COMMANDS = {
-  login: [login, 'Simpan token member dan pasang jadwal (opsi: --server <url> --token <token> --name <device> --no-schedule)'],
+  login: [login, 'Simpan token member dan pasang jadwal (opsi: --token <token> --name <device> --server <url> --no-schedule)'],
   push: [push, 'Kirim data pemakaian ke server sekarang'],
   status: [status, 'Tampilkan status login, jadwal, dan kiriman terakhir'],
   schedule: [schedule, 'Pasang atau lepas jadwal otomatis: schedule on|off'],

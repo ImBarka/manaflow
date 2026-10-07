@@ -58,16 +58,7 @@ export function usagePayload(period) {
   return codeburnJson(['status', '--format', 'menubar-json', '--period', period, '--no-optimize'])
 }
 
-// Recent sessions that have a context tree; empty when the tool is not in use.
-export async function contextList(provider) {
-  try {
-    const listed = await codeburnJson(['context', '--list', '--json', '--provider', provider])
-    return Array.isArray(listed.sessions) ? listed.sessions : []
-  } catch {
-    return []
-  }
-}
-
+// The context tree of one session, or null when codeburn cannot find its transcript.
 export async function contextTree(provider, sessionId) {
   try {
     return await codeburnJson(['context', sessionId, '--json', '--provider', provider])

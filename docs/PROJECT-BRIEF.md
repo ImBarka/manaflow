@@ -70,6 +70,7 @@ Tiga bagian dalam satu repo:
 | Data member | Nama + posisi (jabatan). Semua member satu tim (data & IT), jadi tidak ada pembagian tim. Email tidak dikumpulkan |
 | Retensi | 3 bulan |
 | Identitas member | Token dibuat admin dan sudah terikat ke nama + posisi; member tidak mengetik nama. Nama device otomatis dari hostname, bisa diganti |
+| Laptop kedua | Token disimpan sebagai hash dan tidak bisa ditampilkan lagi. Untuk laptop tambahan, admin membuat token tambahan ("Tambah device"); token lama tetap berlaku. "Ganti token" mematikan semua token member itu |
 | Token dashboard | Satu token per pemegang akses, supaya akses satu orang bisa dicabut tanpa mengganti milik yang lain |
 | Mesin collector | Paket `codeburn` sebagai dependensi, dipanggil lewat keluaran JSON-nya. Kode parser tidak disalin ke repo ini; pemangkasan dilakukan setelah alurnya terbukti |
 
@@ -174,8 +175,10 @@ Dua tampilan (keputusan 2026-10-07):
   untuk semua tool sekaligus; rincian per tool tetap ada di panel By Tool).
 
 Untuk tampilan kedua, collector mengirim paket Usage codeburn untuk enam periode (today dan week
-tiap kiriman; 30 hari, bulan, 6 bulan, lifetime tiap 6 jam) serta pohon Context untuk sesi yang
-berubah (maksimal 6 per kiriman). Sebelum dikirim dibuang: nama branch, tautan PR, sesi live,
+tiap kiriman; 30 hari, bulan, 6 bulan, lifetime tiap 6 jam) serta pohon Context untuk semua sesi
+Claude Code dan Codex dalam jendela 35 hari yang baru atau berubah. Membangun pohon Context makan
+±1 detik per sesi, jadi tiap kiriman dibatasi 45 detik untuk itu (terbaru dulu) dan sisanya
+menyusul di kiriman berikutnya. Sebelum dikirim dibuang: nama branch, tautan PR, sesi live,
 path folder lokal (nama file dan nama project tetap). Pohon Context hanya berisi jumlah token per
 jenis blok dan per tool, bukan isi percakapan.
 

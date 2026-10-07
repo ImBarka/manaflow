@@ -6,6 +6,17 @@
     <meta name="robots" content="noindex" />
     <title>Manaflow · Admin</title>
     <link rel="stylesheet" href="style.css" />
+    <script>
+      // Same saved theme as /u/, applied before first paint.
+      (function () {
+        var saved = null
+        try {
+          saved = localStorage.getItem('codeburn-theme')
+        } catch (e) {}
+        var dark = saved === 'dark' || (saved !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+        if (dark) document.documentElement.classList.add('dark')
+      })()
+    </script>
   </head>
   <body>
     <main id="app"></main>

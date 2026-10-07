@@ -39,13 +39,16 @@ npm install -g github:ImBarka/manaflow
 
 ## Login
 
-Kamu akan menerima satu perintah login dari admin, berisi token pribadimu. Tempel dan jalankan:
+Kamu akan menerima token pribadi dari admin. Jalankan:
 
 ```bash
-manaflow login --server <alamat server> --token <token kamu>
+manaflow login
 ```
 
-Token itu milikmu sendiri; jangan dibagikan. Login sekaligus memasang jadwal kirim otomatis
+lalu tempel tokenmu saat diminta. Bisa juga dalam satu baris: `manaflow login --token <token kamu>`.
+
+Token itu milikmu sendiri; jangan dibagikan. Punya laptop kedua? Minta token tambahan ke admin
+(token pertamamu tetap berlaku), atau pakai lagi token yang sama. Login sekaligus memasang jadwal kirim otomatis
 (Task Scheduler di Windows, launchd di macOS, systemd atau cron di Linux).
 
 Lalu kirim data pertama:

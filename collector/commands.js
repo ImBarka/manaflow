@@ -2,20 +2,27 @@ import { randomUUID } from 'node:crypto'
 import { hostname, platform } from 'node:os'
 import { createInterface } from 'node:readline/promises'
 
-import { collect, collectionWindow, contextList, contextTree, resetDailyCache, usagePayload } from './codeburn.js'
+import { collect, collectionWindow, contextTree, resetDailyCache, usagePayload } from './codeburn.js'
 import { configDir, loadConfig, loadState, removeAll, saveConfig, saveState } from './config.js'
 import { UserError } from './errors.js'
 import { MAX_SESSIONS_PER_REQUEST, chunk, dayKey, diff, sessionKey, toDay, toSession } from './payload.js'
 import { INTERVAL_MINUTES, installSchedule, removeSchedule, scheduleInstalled, schedulerLabel } from './schedule.js'
 import {
-  MAX_CONTEXT_TREES_PER_PUSH,
-  changedContextSessions,
+  CONTEXT_BATCH,
+  CONTEXT_BUDGET_MS,
+  contextKey,
+  contextMarker,
   duePeriods,
   historyIsStale,
   payloadFingerprint,
+  pendingContextSessions,
   stripContextTree,
   stripUsagePayload,
 } from './usage.js'
+
+// The team's server, so a member only has to paste a token. Another deployment
+// is reached with --server or MANAFLOW_SERVER.
+const DEFAULT_SERVER = 'https://manaflow.manaflow-server.workers.dev'
 
 // Claude Code keeps session files for 30 days; a few extra days cover late pushes.
 const WINDOW_DAYS = 35
@@ -78,20 +85,21 @@ function device(config) {
 
 export async function login(args, { version, out }) {
   const previous = loadConfig()
-  let serverUrl = flag(args, '--server')
+  const serverUrl = normalizeServerUrl(
+    flag(args, '--server') ?? process.env.MANAFLOW_SERVER ?? previous?.serverUrl ?? DEFAULT_SERVER,
+  )
   let token = flag(args, '--token') ?? process.env.MANAFLOW_TOKEN
 
   out(NOTICE)
-  if (!serverUrl || !token) {
+  out(`\nServer: ${serverUrl}\n`)
+  if (!token) {
     const rl = createInterface({ input: process.stdin, output: process.stdout })
     try {
-      serverUrl ??= await rl.question(`\nURL server${previous ? ` [${previous.serverUrl}]` : ''}: `)
-      token ??= await rl.question('Token member: ')
+      token = await rl.question('Token member: ')
     } finally {
       rl.close()
     }
   }
-  serverUrl = normalizeServerUrl(serverUrl.trim() || previous?.serverUrl || '')
   token = token.trim()
   if (!token) throw new UserError('Token kosong.')
 
@@ -153,8 +161,8 @@ export async function push(_args, { version, out }) {
   // failure here never costs the sessions above.
   try {
     const periods = await pushUsage(config, state, collected.daily)
-    const trees = await pushContexts(config, state)
-    out(`Usage: ${periods} periode. Context: ${trees} sesi.\n`)
+    const trees = await pushContexts(config, state, collected.sessions)
+    out(`Usage: ${periods} periode. Context: ${trees.sent} sesi${trees.waiting ? ` (${trees.waiting} menunggu kiriman berikutnya)` : ''}.\n`)
   } finally {
     saveState(state)
   }
@@ -183,32 +191,41 @@ async function pushUsage(config, state, daily) {
   return sentCount
 }
 
-async function pushContexts(config, state) {
-  const sentMtimes = (state.contexts ??= {})
-  let budget = MAX_CONTEXT_TREES_PER_PUSH
-  let sentCount = 0
-  for (const provider of ['claude', 'codex']) {
-    const changed = changedContextSessions(await contextList(provider), sentMtimes, provider).slice(0, budget)
-    if (!changed.length) continue
-    budget -= changed.length
-    const sessions = []
-    for (const session of changed) {
-      const tree = await contextTree(provider, session.sessionId)
-      if (!tree) continue
-      sessions.push({
-        sessionId: session.sessionId,
-        title: session.title,
-        project: session.project,
-        mtimeMs: session.mtimeMs,
-        sizeBytes: session.sizeBytes,
-        tree: stripContextTree(tree),
-      })
-    }
-    if (sessions.length) await post(config, '/v1/ingest/context', { device: { id: config.deviceId }, provider, sessions })
-    for (const session of changed) sentMtimes[`${provider}:${session.sessionId}`] = session.mtimeMs
-    sentCount += sessions.length
+async function pushContexts(config, state, sessions) {
+  delete state.contexts // superseded by contextMarkers
+  const markers = (state.contextMarkers ??= {})
+  const pending = pendingContextSessions(sessions, markers)
+  const deadline = Date.now() + CONTEXT_BUDGET_MS
+  const built = { claude: [], codex: [] }
+  const done = []
+  for (const session of pending) {
+    if (Date.now() >= deadline) break
+    const tree = await contextTree(session.provider, session.sessionId)
+    done.push(session)
+    // No tree means codeburn has no transcript for it; it is retried only if the session changes.
+    if (!tree) continue
+    built[session.provider].push({
+      sessionId: session.sessionId,
+      title: session.title,
+      project: session.project,
+      mtimeMs: tree.session?.mtimeMs ?? Date.parse(session.endedAt),
+      sizeBytes: tree.session?.sizeBytes ?? 0,
+      tree: stripContextTree(tree),
+    })
   }
-  return sentCount
+
+  let sent = 0
+  for (const [provider, trees] of Object.entries(built)) {
+    for (const batch of chunk(trees, CONTEXT_BATCH)) {
+      await post(config, '/v1/ingest/context', { device: { id: config.deviceId }, provider, sessions: batch })
+      sent += batch.length
+    }
+  }
+  for (const session of done) markers[contextKey(session)] = contextMarker(session)
+  // Sessions that left the collection window drop out, so the state file stays bounded.
+  const current = new Set(sessions.map(contextKey))
+  for (const key of Object.keys(markers)) if (!current.has(key)) delete markers[key]
+  return { sent, waiting: pending.length - done.length }
 }
 
 export async function status(_args, { out }) {

@@ -1,4 +1,4 @@
-import { dateTime, h } from './dom.js'
+import { brand, dateTime, h } from './dom.js'
 
 // The admin token is kept for this tab only; closing the tab forgets it.
 const TOKEN_KEY = 'manaflow.admin'
@@ -154,8 +154,15 @@ function membersCard() {
     if (newPosition == null) return
     run(() => api('POST', `members/${member.id}`, { name: newName, position: newPosition }))
   }
+  // For a second laptop: the tokens already handed out keep working.
+  const addToken = (member) => {
+    run(async () => {
+      const { token } = await api('POST', `members/${member.id}/extra-token`)
+      state.issued.push({ kind: 'Member', name: member.name, position: member.position, token })
+    })
+  }
   const rotate = (member) => {
-    if (!confirm(`Buat token baru untuk ${member.name}? Token lamanya langsung tidak berlaku.`)) return
+    if (!confirm(`Ganti token ${member.name}? SEMUA token lamanya langsung tidak berlaku, dan tiap laptopnya harus login ulang. Untuk menambah laptop, pakai "Tambah device".`)) return
     run(async () => {
       const { token } = await api('POST', `members/${member.id}/token`)
       state.issued.push({ kind: 'Member', name: member.name, position: member.position, token })
@@ -185,7 +192,7 @@ function membersCard() {
         h(
           'thead',
           {},
-          h('tr', {}, h('th', {}, 'Nama'), h('th', {}, 'Posisi'), h('th', { class: 'num' }, 'Device'), h('th', {}, 'Kiriman terakhir'), h('th', {}, 'Status'), h('th', {}, '')),
+          h('tr', {}, h('th', {}, 'Nama'), h('th', {}, 'Posisi'), h('th', { class: 'num' }, 'Device'), h('th', { class: 'num' }, 'Token'), h('th', {}, 'Kiriman terakhir'), h('th', {}, 'Status'), h('th', {}, '')),
         ),
         h(
           'tbody',
@@ -197,6 +204,7 @@ function membersCard() {
               h('td', {}, member.name),
               h('td', {}, member.position || '—'),
               h('td', { class: 'num' }, String(member.devices)),
+              h('td', { class: 'num' }, String(member.tokens)),
               h('td', {}, dateTime(member.lastSeen)),
               h('td', {}, member.revokedAt ? 'Dicabut' : member.devices ? 'Aktif' : 'Belum login'),
               h(
@@ -204,7 +212,9 @@ function membersCard() {
                 {},
                 h('button', { class: 'btn', type: 'button', onclick: () => edit(member) }, 'Ubah'),
                 ' ',
-                h('button', { class: 'btn', type: 'button', onclick: () => rotate(member) }, 'Token baru'),
+                member.revokedAt ? null : h('button', { class: 'btn', type: 'button', onclick: () => addToken(member) }, 'Tambah device'),
+                ' ',
+                h('button', { class: 'btn', type: 'button', onclick: () => rotate(member) }, 'Ganti token'),
                 ' ',
                 member.revokedAt ? null : h('button', { class: 'btn', type: 'button', onclick: () => revoke(member) }, 'Cabut'),
                 ' ',
@@ -318,7 +328,7 @@ function loginView() {
         run(async () => {})
       },
     },
-    h('h1', {}, 'Manaflow · Admin'),
+    brand('admin'),
     h('div', { class: 'muted' }, 'Kelola member dan akses dashboard.'),
     input,
     state.error ? h('div', { class: 'error' }, state.error) : null,
@@ -335,8 +345,8 @@ function render() {
     ...[
       h(
         'div',
-        { class: 'bar' },
-        h('h1', {}, 'Manaflow · Admin'),
+        { class: 'bar topbar' },
+        brand('admin'),
         h('div', { class: 'spacer' }),
         state.busy ? h('span', { class: 'muted' }, 'Memproses…') : null,
         h('a', { class: 'btn', href: './' }, 'Dashboard'),

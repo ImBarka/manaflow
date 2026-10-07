@@ -89,7 +89,8 @@ async function createViewer(request, env) {
 async function listMembers(env) {
   const rows = await env.DB.prepare(
     `SELECT m.id, m.name, m.position, m.created_at AS createdAt, m.revoked_at AS revokedAt,
-            COUNT(d.id) AS devices, MAX(d.last_seen) AS lastSeen
+            COUNT(d.id) AS devices, MAX(d.last_seen) AS lastSeen,
+            1 + (SELECT COUNT(*) FROM member_tokens t WHERE t.member_id = m.id) AS tokens
      FROM members m LEFT JOIN devices d ON d.member_id = m.id
      GROUP BY m.id ORDER BY m.name COLLATE NOCASE`,
   ).all()
@@ -106,13 +107,28 @@ async function updateMember(request, env, id) {
   return result.meta.changes ? json(200, { ok: true }) : json(404, { error: 'not found' })
 }
 
-// Issues a fresh token and lifts any revocation; the old token stops working.
+// Issues a fresh token and lifts any revocation. Every token the member had,
+// extra ones included, stops working: this is the answer to a leaked token.
 async function rotateMemberToken(env, id) {
   const token = newToken('mf')
-  const result = await env.DB.prepare('UPDATE members SET token_hash = ?, revoked_at = NULL WHERE id = ?')
-    .bind(await sha256Hex(token), id)
-    .run()
+  const [result] = await env.DB.batch([
+    env.DB.prepare('UPDATE members SET token_hash = ?, revoked_at = NULL WHERE id = ?').bind(await sha256Hex(token), id),
+    env.DB.prepare('DELETE FROM member_tokens WHERE member_id = ?').bind(id),
+  ])
   return result.meta.changes ? json(200, { id, token }) : json(404, { error: 'not found' })
+}
+
+// Adds a token for another laptop of the same member. Tokens are stored hashed
+// and cannot be shown again, so a second device gets its own instead; the
+// tokens already handed out keep working.
+async function addMemberToken(env, id) {
+  const member = await env.DB.prepare('SELECT id FROM members WHERE id = ? AND revoked_at IS NULL').bind(id).first()
+  if (!member) return json(404, { error: 'not found or revoked' })
+  const token = newToken('mf')
+  await env.DB.prepare('INSERT INTO member_tokens (member_id, token_hash, created_at) VALUES (?, ?, ?)')
+    .bind(id, await sha256Hex(token), new Date().toISOString())
+    .run()
+  return json(201, { id, token })
 }
 
 // Only for entries made by mistake: a member that has pushed data keeps it, and
@@ -120,8 +136,23 @@ async function rotateMemberToken(env, id) {
 async function deleteMember(env, id) {
   const device = await env.DB.prepare('SELECT 1 FROM devices WHERE member_id = ? LIMIT 1').bind(id).first()
   if (device) return json(409, { error: 'member has devices; revoke instead' })
-  const result = await env.DB.prepare('DELETE FROM members WHERE id = ?').bind(id).run()
+  const [, result] = await env.DB.batch([
+    env.DB.prepare('DELETE FROM member_tokens WHERE member_id = ?').bind(id),
+    env.DB.prepare('DELETE FROM members WHERE id = ?').bind(id),
+  ])
   return result.meta.changes ? json(200, { ok: true }) : json(404, { error: 'not found' })
+}
+
+// The member a token belongs to, through either its original or an extra token.
+async function memberByToken(env, token) {
+  const hash = await sha256Hex(token)
+  return env.DB.prepare(
+    `SELECT id FROM members
+     WHERE revoked_at IS NULL
+       AND (token_hash = ?1 OR id IN (SELECT member_id FROM member_tokens WHERE token_hash = ?1))`,
+  )
+    .bind(hash)
+    .first()
 }
 
 async function listViewers(env) {
@@ -138,7 +169,7 @@ async function revoke(env, table, id) {
   return json(200, { ok: true, changed: result.meta.changes > 0 })
 }
 
-const ADMIN_PATH = /^\/v1\/admin\/(members|viewers)(?:\/(\d+)(?:\/(revoke|token))?)?$/
+const ADMIN_PATH = /^\/v1\/admin\/(members|viewers)(?:\/(\d+)(?:\/(revoke|token|extra-token))?)?$/
 
 async function admin(request, env, [, kind, rawId, action]) {
   if (!(await isAdmin(request, env))) return json(401, { error: 'unauthorized' })
@@ -150,6 +181,7 @@ async function admin(request, env, [, kind, rawId, action]) {
   if (route === 'DELETE members/:id') return deleteMember(env, id)
   if (route === 'POST members/:id/revoke') return revoke(env, 'members', id)
   if (route === 'POST members/:id/token') return rotateMemberToken(env, id)
+  if (route === 'POST members/:id/extra-token') return addMemberToken(env, id)
   if (route === 'GET viewers') return listViewers(env)
   if (route === 'POST viewers') return createViewer(request, env)
   if (route === 'POST viewers/:id/revoke') return revoke(env, 'viewers', id)
@@ -318,9 +350,7 @@ function dailyStatement(db, memberId, deviceId, d, now) {
 async function ingest(request, env) {
   const token = bearer(request)
   if (!token) return json(401, { error: 'unauthorized' })
-  const member = await env.DB.prepare('SELECT id FROM members WHERE token_hash = ? AND revoked_at IS NULL')
-    .bind(await sha256Hex(token))
-    .first()
+  const member = await memberByToken(env, token)
   if (!member) return json(401, { error: 'unauthorized' })
 
   const body = await readJson(request)
@@ -371,9 +401,7 @@ const CONTEXT_PROVIDERS = new Set(['claude', 'codex'])
 async function memberDevice(request, env, limit) {
   const token = bearer(request)
   if (!token) return json(401, { error: 'unauthorized' })
-  const member = await env.DB.prepare('SELECT id FROM members WHERE token_hash = ? AND revoked_at IS NULL')
-    .bind(await sha256Hex(token))
-    .first()
+  const member = await memberByToken(env, token)
   if (!member) return json(401, { error: 'unauthorized' })
   const body = await readJson(request, limit)
   if (!body) return json(400, { error: 'invalid or oversized JSON body' })
@@ -455,7 +483,7 @@ async function contextSessions(request, env, url) {
   if (!(await isViewer(request, env))) return json(401, { error: 'unauthorized' })
   const rows = await env.DB.prepare(
     `SELECT provider, session_id AS sessionId, title, project, mtime_ms AS mtimeMs, size_bytes AS sizeBytes
-     FROM context_trees WHERE device_id = ? AND provider = ? ORDER BY mtime_ms DESC LIMIT 50`,
+     FROM context_trees WHERE device_id = ? AND provider = ? ORDER BY mtime_ms DESC LIMIT 500`,
   )
     .bind(url.searchParams.get('device') ?? '', url.searchParams.get('provider') ?? 'claude')
     .all()

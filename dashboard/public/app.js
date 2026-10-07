@@ -1,4 +1,4 @@
-import { dateTime, h } from './dom.js'
+import { brand, dateTime, h } from './dom.js'
 
 const TOKEN_KEY = 'manaflow.token'
 const SVG_NS = 'http://www.w3.org/2000/svg'
@@ -528,7 +528,7 @@ function loginView() {
   return h(
     'form',
     { class: 'card login', onsubmit: submit },
-    h('h1', {}, 'Manaflow'),
+    brand(),
     h('div', { class: 'muted' }, 'Masukkan token dashboard untuk melihat pemakaian tim.'),
     input,
     state.error ? h('div', { class: 'error' }, state.error) : null,
@@ -556,8 +556,8 @@ function dashboardView() {
   return [
     h(
       'div',
-      { class: 'bar' },
-      h('h1', {}, 'Manaflow'),
+      { class: 'bar topbar' },
+      brand('tim'),
       h('div', { class: 'spacer' }),
       h(
         'div',

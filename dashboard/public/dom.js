@@ -12,3 +12,8 @@ export function h(tag, props = {}, ...children) {
 
 export const dateTime = (iso) =>
   iso ? new Date(iso).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }) : '—'
+
+// The wordmark, as on the per-member view: Mana + flow in the brand color.
+export function brand(tag) {
+  return [h('span', { class: 'brand' }, 'Mana', h('span', {}, 'flow')), tag ? h('span', { class: 'brand-tag' }, tag) : null]
+}
