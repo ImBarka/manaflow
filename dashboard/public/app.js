@@ -572,6 +572,7 @@ function dashboardView() {
         h('option', { value: '' }, 'Semua posisi'),
         positions.map((name) => h('option', { value: name, selected: state.position === name ? '' : null }, name)),
       ),
+      h('a', { class: 'btn', href: 'u/' }, 'Usage & Context'),
       h('button', { class: 'btn', onclick: () => logout() }, 'Keluar'),
     ),
     state.error ? h('div', { class: 'error' }, state.error) : null,

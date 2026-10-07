@@ -21,7 +21,8 @@ lalu `manaflow login --server http://127.0.0.1:8787` dan `manaflow push`.
 
 ## Dokumen
 
-- [docs/PROJECT-BRIEF.md](docs/PROJECT-BRIEF.md) — tujuan, keputusan, arsitektur, urutan pengerjaan. Baca ini dulu.
+- [docs/INSTALL.md](docs/INSTALL.md) — panduan pasang untuk member, termasuk apa yang dikirim dan tidak.
+- [docs/PROJECT-BRIEF.md](docs/PROJECT-BRIEF.md) — tujuan, keputusan, arsitektur, urutan pengerjaan.
 
 ## Struktur
 
@@ -39,5 +40,8 @@ Node 22.13 atau lebih baru.
 
 ## Lisensi
 
-Private, untuk pemakaian internal tim. Notice pihak ketiga ada di
+MIT, lihat [LICENSE](LICENSE). Notice pihak ketiga ada di
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+Repo ini publik, tetapi tidak memuat token, daftar member, maupun data pemakaian: semuanya ada di
+server dan di file lokal yang di-ignore git.

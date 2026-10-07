@@ -7,7 +7,7 @@ Terakhir diperbarui: 2026-10-07
 
 ## 1. Tujuan
 
-Manaflow adalah aplikasi private untuk satu tim (tim data & IT, 27 member) yang
+Manaflow adalah aplikasi internal untuk satu tim (tim data & IT, 27 member) yang
 mengumpulkan data pemakaian AI coding dari laptop tiap member ke satu dashboard,
 supaya lead bisa melihat pemakaian per member, per device, per model, dan per tool.
 
@@ -58,10 +58,10 @@ Tiga bagian dalam satu repo:
 | Topik | Keputusan |
 |---|---|
 | Nama | manaflow |
-| Repo | https://github.com/ImBarka/manaflow, private, akun pribadi (sementara) |
+| Repo | https://github.com/ImBarka/manaflow, publik sejak 2026-10-07, akun pribadi (sementara) |
 | Server | Cloudflare Workers + D1, paket gratis, akun pribadi (sementara) |
 | Frekuensi kirim | Tiap 30 menit, hanya data yang berubah |
-| Instalasi | npm, dipasang dari repo private. File executable per OS menyusul bila Node jadi kendala |
+| Instalasi | npm, dipasang dari repo GitHub (`npm install -g github:ImBarka/manaflow`). File executable per OS menyusul bila Node jadi kendala |
 | OS yang didukung | Windows, macOS, Linux |
 | Data yang dikirim | Metadata saja (rincian di bagian 5) |
 | Tool | Semua 41 provider codeburn dipertahankan. Yang dipakai tim: Claude Code, Codex, Antigravity, Hermes |
@@ -207,10 +207,11 @@ Kewajiban lisensi: sertakan notice MIT codeburn di repo ini.
   mudah dipindah: URL server bisa dikonfigurasi, database bisa diekspor.
 - **Pemberitahuan ke tim.** Dikirim sebelum instal, bersama instruksi instal: apa yang dikirim,
   apa yang tidak, siapa yang bisa melihat, berapa lama disimpan.
-- **Instal dari repo private.** `npm i -g github:ImBarka/manaflow` hanya berhasil bila member
-  punya akses ke repo private itu, artinya 27 orang harus dijadikan collaborator. Alternatif:
-  server menyajikan paket collector sebagai file `.tgz`, lalu member memasang dari URL server.
-  Belum diputuskan.
+- **Repo publik** (keputusan 2026-10-07), supaya member cukup menjalankan
+  `npm install -g github:ImBarka/manaflow` tanpa akun GitHub. Konsekuensinya: tidak boleh ada
+  token, daftar member, atau data asli yang masuk repo, dan riwayat git bersifat permanen.
+  Keamanan bergantung pada token, bukan pada kode yang dirahasiakan. Alamat server jadi diketahui
+  umum; server belum punya rate limit.
 - **Node di 27 laptop.** Perlu survei siapa yang belum punya Node 22.13 atau lebih baru.
 - **Daftar member** (nama + posisi) ada di `docs/list_karyawan.md`, di-ignore git karena berisi nama asli.
 

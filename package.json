@@ -9,6 +9,8 @@
   },
   "files": [
     "collector",
+    "!collector/test",
+    "LICENSE",
     "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {
@@ -20,5 +22,9 @@
   "dependencies": {
     "codeburn": "0.9.25"
   },
-  "license": "UNLICENSED"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ImBarka/manaflow.git"
+  }
 }
