@@ -2,11 +2,20 @@ import { randomUUID } from 'node:crypto'
 import { hostname, platform } from 'node:os'
 import { createInterface } from 'node:readline/promises'
 
-import { collect, collectionWindow } from './codeburn.js'
+import { collect, collectionWindow, contextList, contextTree, resetDailyCache, usagePayload } from './codeburn.js'
 import { configDir, loadConfig, loadState, removeAll, saveConfig, saveState } from './config.js'
 import { UserError } from './errors.js'
 import { MAX_SESSIONS_PER_REQUEST, chunk, dayKey, diff, sessionKey, toDay, toSession } from './payload.js'
 import { INTERVAL_MINUTES, installSchedule, removeSchedule, scheduleInstalled, schedulerLabel } from './schedule.js'
+import {
+  MAX_CONTEXT_TREES_PER_PUSH,
+  changedContextSessions,
+  duePeriods,
+  historyIsStale,
+  payloadFingerprint,
+  stripContextTree,
+  stripUsagePayload,
+} from './usage.js'
 
 // Claude Code keeps session files for 30 days; a few extra days cover late pushes.
 const WINDOW_DAYS = 35
@@ -42,10 +51,10 @@ function normalizeServerUrl(input) {
   return url.origin
 }
 
-async function post(config, body) {
+async function post(config, path, body) {
   let res
   try {
-    res = await fetch(`${config.serverUrl}/v1/ingest`, {
+    res = await fetch(`${config.serverUrl}${path}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${config.token}` },
       body: JSON.stringify(body),
@@ -56,7 +65,10 @@ async function post(config, body) {
   }
   if (res.status === 401) throw new UserError('Token ditolak server. Jalankan `manaflow login` lagi.')
   if (res.status === 403) throw new UserError('Device ini terdaftar atas member lain.')
-  if (!res.ok) throw new UserError(`Server menjawab HTTP ${res.status}.`)
+  if (!res.ok) {
+    const detail = await res.json().then((data) => data.error, () => '')
+    throw new UserError(`Server menjawab HTTP ${res.status}${detail ? ` (${detail})` : ''} untuk ${path}.`)
+  }
   return res.json()
 }
 
@@ -91,7 +103,7 @@ export async function login(args, { version, out }) {
     version,
   }
   // Registers the device and proves the token works before anything is saved.
-  await post(config, { device: device(config) })
+  await post(config, '/v1/ingest', { device: device(config) })
   saveConfig(config)
   out(`\nLogin berhasil. Device: ${config.deviceName}\n`)
   if (args.includes('--no-schedule')) {
@@ -121,13 +133,14 @@ export async function push(_args, { version, out }) {
   let rejected = 0
   try {
     for (const batch of batches) {
-      const result = await post(config, { device: device(config), ...batch })
+      const result = await post(config, '/v1/ingest', { device: device(config), ...batch })
       rejected += result.rejected ?? 0
       for (const s of batch.sessions) sent[sessionKey(s)] = seen[sessionKey(s)]
       for (const d of batch.daily) sent[dayKey(d)] = seen[dayKey(d)]
     }
   } finally {
-    saveState({ sent, lastPush: batches.length ? new Date().toISOString() : state.lastPush })
+    Object.assign(state, { sent, lastPush: batches.length ? new Date().toISOString() : state.lastPush })
+    saveState(state)
   }
 
   out(
@@ -135,6 +148,67 @@ export async function push(_args, { version, out }) {
       (rejected ? ` (${rejected} ditolak server)` : '') +
       `. Tidak berubah: ${collected.sessions.length - changedSessions.length} sesi.\n`,
   )
+
+  // The per-member Usage and Context views. Sent after the core data so a
+  // failure here never costs the sessions above.
+  try {
+    const periods = await pushUsage(config, state, collected.daily)
+    const trees = await pushContexts(config, state)
+    out(`Usage: ${periods} periode. Context: ${trees} sesi.\n`)
+  } finally {
+    saveState(state)
+  }
+}
+
+async function pushUsage(config, state, daily) {
+  const usage = (state.usage ??= { sentAt: {}, prints: {} })
+  let healed = false
+  let sentCount = 0
+  for (const period of duePeriods(usage.sentAt)) {
+    let payload = await usagePayload(period)
+    if (!healed && historyIsStale(payload, daily)) {
+      resetDailyCache()
+      healed = true
+      payload = await usagePayload(period)
+    }
+    const stripped = stripUsagePayload(payload)
+    const print = payloadFingerprint(stripped)
+    if (usage.prints[period] !== print) {
+      await post(config, '/v1/ingest/usage', { device: { id: config.deviceId }, period, payload: stripped })
+      usage.prints[period] = print
+      sentCount += 1
+    }
+    usage.sentAt[period] = Date.now()
+  }
+  return sentCount
+}
+
+async function pushContexts(config, state) {
+  const sentMtimes = (state.contexts ??= {})
+  let budget = MAX_CONTEXT_TREES_PER_PUSH
+  let sentCount = 0
+  for (const provider of ['claude', 'codex']) {
+    const changed = changedContextSessions(await contextList(provider), sentMtimes, provider).slice(0, budget)
+    if (!changed.length) continue
+    budget -= changed.length
+    const sessions = []
+    for (const session of changed) {
+      const tree = await contextTree(provider, session.sessionId)
+      if (!tree) continue
+      sessions.push({
+        sessionId: session.sessionId,
+        title: session.title,
+        project: session.project,
+        mtimeMs: session.mtimeMs,
+        sizeBytes: session.sizeBytes,
+        tree: stripContextTree(tree),
+      })
+    }
+    if (sessions.length) await post(config, '/v1/ingest/context', { device: { id: config.deviceId }, provider, sessions })
+    for (const session of changed) sentMtimes[`${provider}:${session.sessionId}`] = session.mtimeMs
+    sentCount += sessions.length
+  }
+  return sentCount
 }
 
 export async function status(_args, { out }) {

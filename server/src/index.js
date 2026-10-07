@@ -26,10 +26,10 @@ function newToken(prefix) {
   return `${prefix}_${b64}`
 }
 
-async function readJson(request) {
-  if (Number(request.headers.get('content-length') ?? 0) > MAX_BODY_BYTES) return null
+async function readJson(request, limit = MAX_BODY_BYTES) {
+  if (Number(request.headers.get('content-length') ?? 0) > limit) return null
   const text = await request.text()
-  if (text.length > MAX_BODY_BYTES) return null
+  if (text.length > limit) return null
   try {
     const body = JSON.parse(text)
     return body && typeof body === 'object' ? body : null
@@ -163,6 +163,7 @@ async function purge(env, now = new Date()) {
   await env.DB.batch([
     env.DB.prepare("DELETE FROM sessions WHERE ended_at != '' AND ended_at < ?").bind(cutoff),
     env.DB.prepare('DELETE FROM daily WHERE day < ?').bind(cutoff.slice(0, 10)),
+    env.DB.prepare('DELETE FROM context_trees WHERE updated_at < ?').bind(cutoff),
   ])
 }
 
@@ -194,7 +195,7 @@ async function dashboard(request, env, url) {
   if (!range) return json(400, { error: 'from and to must be YYYY-MM-DD, from <= to' })
   const { from, to } = range
 
-  const [members, devices, daily, usage, sessions] = await env.DB.batch([
+  const [members, devices, daily, usage, sessions, sessionDays] = await env.DB.batch([
     env.DB.prepare('SELECT id, name, position, revoked_at IS NOT NULL AS revoked FROM members'),
     env.DB.prepare('SELECT id, member_id AS memberId, name, os, collector_version AS version, last_seen AS lastSeen FROM devices'),
     env.DB.prepare(
@@ -218,6 +219,13 @@ async function dashboard(request, env, url) {
               SUM(s.cache_write_tokens) AS cacheWriteTokens
        FROM sessions s WHERE ${IN_RANGE} GROUP BY 1, 2`,
     ).bind(from, to),
+    // Sessions active on each day, for the daily recap.
+    env.DB.prepare(
+      `SELECT s.member_id AS memberId, json_extract(seg.value, '$.day') AS day,
+              COUNT(DISTINCT s.device_id || '/' || s.provider || '/' || s.session_id) AS sessions
+       FROM sessions s, json_each(s.segments) seg
+       WHERE json_extract(seg.value, '$.day') BETWEEN ? AND ? GROUP BY 1, 2`,
+    ).bind(from, to),
   ])
   return json(200, {
     from,
@@ -227,6 +235,7 @@ async function dashboard(request, env, url) {
     daily: daily.results,
     usage: usage.results,
     sessions: sessions.results,
+    sessionDays: sessionDays.results,
   })
 }
 
@@ -351,6 +360,117 @@ async function ingest(request, env) {
   return json(200, { accepted: statements.length - 1, rejected })
 }
 
+const MAX_USAGE_BYTES = 1024 * 1024
+const MAX_CONTEXT_TREES = 20
+const MAX_TREE_BYTES = 64 * 1024
+const PERIODS = new Set(['today', 'week', '30days', 'month', 'all', 'lifetime'])
+const CONTEXT_PROVIDERS = new Set(['claude', 'codex'])
+
+// Resolves the member behind the token and a device it already registered
+// through /v1/ingest. Returns a Response when the request must be refused.
+async function memberDevice(request, env, limit) {
+  const token = bearer(request)
+  if (!token) return json(401, { error: 'unauthorized' })
+  const member = await env.DB.prepare('SELECT id FROM members WHERE token_hash = ? AND revoked_at IS NULL')
+    .bind(await sha256Hex(token))
+    .first()
+  if (!member) return json(401, { error: 'unauthorized' })
+  const body = await readJson(request, limit)
+  if (!body) return json(400, { error: 'invalid or oversized JSON body' })
+  const deviceId = str(body.device?.id, 36)
+  const owner = await env.DB.prepare('SELECT member_id FROM devices WHERE id = ?').bind(deviceId).first()
+  if (!owner) return json(400, { error: 'unknown device; push through /v1/ingest first' })
+  if (owner.member_id !== member.id) return json(403, { error: 'device belongs to another member' })
+  return { memberId: member.id, deviceId, body }
+}
+
+async function ingestUsage(request, env) {
+  const ctx = await memberDevice(request, env, MAX_USAGE_BYTES)
+  if (ctx instanceof Response) return ctx
+  const { period, payload } = ctx.body
+  if (!PERIODS.has(period)) return json(400, { error: 'unknown period' })
+  if (!payload || typeof payload !== 'object' || typeof payload.current !== 'object') {
+    return json(400, { error: 'payload.current is required' })
+  }
+  await env.DB.prepare(
+    `INSERT INTO usage_payloads (device_id, period, member_id, body, updated_at) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT (device_id, period) DO UPDATE SET body = excluded.body, updated_at = excluded.updated_at`,
+  )
+    .bind(ctx.deviceId, period, ctx.memberId, JSON.stringify(payload), new Date().toISOString())
+    .run()
+  return json(200, { ok: true })
+}
+
+async function ingestContext(request, env) {
+  const ctx = await memberDevice(request, env)
+  if (ctx instanceof Response) return ctx
+  const provider = str(ctx.body.provider, 20)
+  const sessions = Array.isArray(ctx.body.sessions) ? ctx.body.sessions : []
+  if (!CONTEXT_PROVIDERS.has(provider)) return json(400, { error: 'provider must be claude or codex' })
+  if (sessions.length > MAX_CONTEXT_TREES) return json(400, { error: `at most ${MAX_CONTEXT_TREES} sessions per request` })
+
+  const now = new Date().toISOString()
+  const statements = []
+  for (const s of sessions) {
+    const sessionId = str(s?.sessionId, 200)
+    const tree = JSON.stringify(s?.tree ?? null)
+    if (!sessionId || tree === 'null' || tree.length > MAX_TREE_BYTES) continue
+    statements.push(
+      env.DB.prepare(
+        `INSERT INTO context_trees (device_id, provider, session_id, member_id, title, project, mtime_ms, size_bytes, body, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (device_id, provider, session_id) DO UPDATE SET
+           title = excluded.title, project = excluded.project, mtime_ms = excluded.mtime_ms,
+           size_bytes = excluded.size_bytes, body = excluded.body, updated_at = excluded.updated_at`,
+      ).bind(ctx.deviceId, provider, sessionId, ctx.memberId, str(s.title, 300), str(s.project, 200), int(s.mtimeMs), int(s.sizeBytes), tree, now),
+    )
+  }
+  if (statements.length) await env.DB.batch(statements)
+  return json(200, { accepted: statements.length, rejected: sessions.length - statements.length })
+}
+
+// Who can be picked in the per-member view: every member with their devices.
+async function people(request, env) {
+  if (!(await isViewer(request, env))) return json(401, { error: 'unauthorized' })
+  const [members, devices] = await env.DB.batch([
+    env.DB.prepare('SELECT id, name, position FROM members'),
+    env.DB.prepare('SELECT id, member_id AS memberId, name, os, last_seen AS lastSeen FROM devices'),
+  ])
+  return json(200, { members: members.results, devices: devices.results })
+}
+
+async function deviceUsage(request, env, url) {
+  if (!(await isViewer(request, env))) return json(401, { error: 'unauthorized' })
+  const row = await env.DB.prepare('SELECT body, updated_at AS updatedAt FROM usage_payloads WHERE device_id = ? AND period = ?')
+    .bind(url.searchParams.get('device') ?? '', url.searchParams.get('period') ?? 'today')
+    .first()
+  if (!row) return json(404, { error: 'no usage for this device and period yet' })
+  // The stored body is already JSON; splice it in rather than parse and re-serialise.
+  return new Response(`{"updatedAt":${JSON.stringify(row.updatedAt)},"payload":${row.body}}`, {
+    headers: { 'content-type': 'application/json' },
+  })
+}
+
+async function contextSessions(request, env, url) {
+  if (!(await isViewer(request, env))) return json(401, { error: 'unauthorized' })
+  const rows = await env.DB.prepare(
+    `SELECT provider, session_id AS sessionId, title, project, mtime_ms AS mtimeMs, size_bytes AS sizeBytes
+     FROM context_trees WHERE device_id = ? AND provider = ? ORDER BY mtime_ms DESC LIMIT 50`,
+  )
+    .bind(url.searchParams.get('device') ?? '', url.searchParams.get('provider') ?? 'claude')
+    .all()
+  return json(200, { sessions: rows.results })
+}
+
+async function contextTree(request, env, url) {
+  if (!(await isViewer(request, env))) return json(401, { error: 'unauthorized' })
+  const row = await env.DB.prepare('SELECT body FROM context_trees WHERE device_id = ? AND provider = ? AND session_id = ?')
+    .bind(url.searchParams.get('device') ?? '', url.searchParams.get('provider') ?? 'claude', url.searchParams.get('id') ?? '')
+    .first()
+  if (!row) return json(404, { error: 'not found' })
+  return new Response(row.body, { headers: { 'content-type': 'application/json' } })
+}
+
 export { purge }
 
 export default {
@@ -359,6 +479,12 @@ export default {
     const route = `${request.method} ${url.pathname}`
     if (route === 'GET /v1/health') return json(200, { ok: true })
     if (route === 'POST /v1/ingest') return ingest(request, env)
+    if (route === 'POST /v1/ingest/usage') return ingestUsage(request, env)
+    if (route === 'POST /v1/ingest/context') return ingestContext(request, env)
+    if (route === 'GET /v1/people') return people(request, env)
+    if (route === 'GET /v1/usage') return deviceUsage(request, env, url)
+    if (route === 'GET /v1/context/sessions') return contextSessions(request, env, url)
+    if (route === 'GET /v1/context/tree') return contextTree(request, env, url)
     if (route === 'GET /v1/dashboard') return dashboard(request, env, url)
     if (route === 'GET /v1/sessions') return memberSessions(request, env, url)
     const adminRoute = url.pathname.match(ADMIN_PATH)

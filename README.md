@@ -29,7 +29,8 @@ lalu `manaflow login --server http://127.0.0.1:8787` dan `manaflow push`.
 |---|---|
 | `collector/` | CLI `manaflow` yang diinstal member |
 | `server/` | Cloudflare Worker + skema D1 |
-| `dashboard/public/` | Tampilan web untuk lead: HTML, CSS, dan JS polos, tanpa build dan tanpa dependensi |
+| `dashboard/public/` | Ringkasan tim dan halaman admin: HTML, CSS, dan JS polos, tanpa build |
+| `dashboard/app/` | Usage dan Context per member (React, disalin dari dashboard web codeburn); hasil build masuk ke `dashboard/public/u/` saat deploy |
 | `docs/` | Dokumen proyek |
 
 ## Syarat

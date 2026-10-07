@@ -275,3 +275,51 @@ test('a member can be deleted only while it has no device', async () => {
   assert.ok(!members.some((m) => m.id === empty.id))
   assert.ok(members.some((m) => m.id === used.id))
 })
+
+test('usage payloads and context trees are stored per device and readable only by a viewer', async () => {
+  const member = await createMember('Payloads')
+  const other = await createMember('Intruder')
+  const viewer = await createViewer('Lead 3')
+  const device = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'J' }
+  const payload = { generated: 'now', current: { label: 'Today', cost: 1.25 }, history: { daily: [] } }
+
+  const early = await call('POST', '/v1/ingest/usage', { token: member.token, body: { device, period: 'today', payload } })
+  assert.equal(early.status, 400, 'device must be registered through /v1/ingest first')
+
+  await call('POST', '/v1/ingest', { token: member.token, body: { device } })
+  assert.equal((await call('POST', '/v1/ingest/usage', { token: member.token, body: { device, period: 'today', payload } })).status, 200)
+  assert.equal((await call('POST', '/v1/ingest/usage', { token: other.token, body: { device, period: 'today', payload } })).status, 403)
+  assert.equal((await call('POST', '/v1/ingest/usage', { token: member.token, body: { device, period: 'decade', payload } })).status, 400)
+
+  const tree = { model: 'Opus 5', effective: { tokens: 1000 } }
+  const sent = await call('POST', '/v1/ingest/context', {
+    token: member.token,
+    body: { device, provider: 'claude', sessions: [{ sessionId: 'ctx-1', title: 'T', project: 'p', mtimeMs: 5, sizeBytes: 9, tree }, { sessionId: '', tree }] },
+  })
+  assert.deepEqual(await sent.json(), { accepted: 1, rejected: 1 })
+
+  assert.equal((await call('GET', `/v1/usage?device=${device.id}&period=today`, { token: member.token })).status, 401)
+  const usage = await (await call('GET', `/v1/usage?device=${device.id}&period=today`, { token: viewer.token })).json()
+  assert.deepEqual(usage.payload, payload)
+  assert.equal((await call('GET', `/v1/usage?device=${device.id}&period=week`, { token: viewer.token })).status, 404)
+
+  const list = await (await call('GET', `/v1/context/sessions?device=${device.id}&provider=claude`, { token: viewer.token })).json()
+  assert.deepEqual(list.sessions, [{ provider: 'claude', sessionId: 'ctx-1', title: 'T', project: 'p', mtimeMs: 5, sizeBytes: 9 }])
+  const got = await (await call('GET', `/v1/context/tree?device=${device.id}&provider=claude&id=ctx-1`, { token: viewer.token })).json()
+  assert.deepEqual(got, tree)
+})
+
+test('dashboard reports how many sessions each member had per day', async () => {
+  const member = await createMember('PerDay')
+  const viewer = await createViewer('Lead 4')
+  const device = { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', name: 'K' }
+  const seg = (day) => ({ day, category: 'coding', models: { 'Opus 5': { cost: 1, calls: 1, inputTokens: 1, outputTokens: 1 } } })
+  const sessions = [
+    session({ sessionId: 'a', segments: [seg('2026-08-20'), seg('2026-08-21')] }),
+    session({ sessionId: 'b', segments: [seg('2026-08-21')] }),
+  ]
+  await call('POST', '/v1/ingest', { token: member.token, body: { device, sessions } })
+  const data = await (await call('GET', '/v1/dashboard?from=2026-08-01&to=2026-08-31', { token: viewer.token })).json()
+  const mine = data.sessionDays.filter((d) => d.memberId === member.id).sort((x, y) => x.day.localeCompare(y.day))
+  assert.deepEqual(mine.map((d) => [d.day, d.sessions]), [['2026-08-20', 1], ['2026-08-21', 2]])
+})

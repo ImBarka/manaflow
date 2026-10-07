@@ -10,3 +10,4 @@ dist/
 .dashboard-token
 docs/list_karyawan.md
 .member-tokens.csv
+dashboard/public/u/

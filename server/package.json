@@ -4,8 +4,9 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "test": "node --test"
+    "deploy": "npm run build:dashboard && wrangler deploy",
+    "test": "node --test",
+    "build:dashboard": "npm --prefix ../dashboard/app install --no-audit --no-fund && npm --prefix ../dashboard/app run build"
   },
   "devDependencies": {
     "wrangler": "^4.148.0"

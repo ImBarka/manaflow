@@ -296,6 +296,15 @@ tbody tr[aria-selected='true'] {
   background: var(--wash);
 }
 
+tbody tr.sub td {
+  color: var(--ink-2);
+  border-bottom-color: transparent;
+}
+
+tbody tr.sub td:first-child {
+  padding-left: 30px;
+}
+
 .cellbar {
   display: inline-block;
   height: 8px;

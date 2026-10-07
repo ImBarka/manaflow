@@ -13,6 +13,7 @@ const state = {
   position: '',
   memberId: null,
   sort: 'cost',
+  openDay: null,
   data: null,
   sessions: null,
   error: '',
@@ -217,6 +218,88 @@ function barList(items, limit = 8) {
   )
 }
 
+// One row per active day, newest first; an opened day lists that day's members.
+function dailyRecap(members) {
+  const { data } = state
+  const names = new Map(members.map((member) => [member.id, member.name]))
+  const days = new Map()
+  const cell = (day, memberId) => {
+    const perMember = days.get(day) ?? new Map()
+    days.set(day, perMember)
+    const entry = perMember.get(memberId) ?? { cost: 0, calls: 0, sessions: 0, editTurns: 0, oneShotTurns: 0 }
+    perMember.set(memberId, entry)
+    return entry
+  }
+  for (const row of data.daily) {
+    if (!names.has(row.memberId)) continue
+    const entry = cell(row.day, row.memberId)
+    entry.cost += row.cost
+    entry.calls += row.calls
+    entry.editTurns += row.editTurns
+    entry.oneShotTurns += row.oneShotTurns
+  }
+  for (const row of data.sessionDays ?? []) {
+    if (names.has(row.memberId)) cell(row.day, row.memberId).sessions += row.sessions
+  }
+  if (!days.size) return h('div', { class: 'empty' }, 'Belum ada data pada periode ini.')
+
+  const body = []
+  for (const day of [...days.keys()].sort().reverse()) {
+    const perMember = [...days.get(day).entries()].map(([memberId, entry]) => ({ name: names.get(memberId), ...entry }))
+    const open = state.openDay === day
+    body.push(
+      h(
+        'tr',
+        { class: 'clickable', 'aria-expanded': String(open), onclick: () => { state.openDay = open ? null : day; render() } },
+        h('td', {}, `${open ? '▾' : '▸'} ${dayLabel(day)}`),
+        h('td', { class: 'num' }, money(sum(perMember, 'cost'))),
+        h('td', { class: 'num' }, count(sum(perMember, 'calls'))),
+        h('td', { class: 'num' }, count(sum(perMember, 'sessions'))),
+        h('td', { class: 'num' }, oneShot({ editTurns: sum(perMember, 'editTurns'), oneShotTurns: sum(perMember, 'oneShotTurns') })),
+        h('td', { class: 'num' }, count(perMember.length)),
+      ),
+    )
+    if (!open) continue
+    for (const entry of perMember.sort((a, b) => b.cost - a.cost)) {
+      body.push(
+        h(
+          'tr',
+          { class: 'sub' },
+          h('td', {}, entry.name),
+          h('td', { class: 'num' }, money(entry.cost)),
+          h('td', { class: 'num' }, count(entry.calls)),
+          h('td', { class: 'num' }, count(entry.sessions)),
+          h('td', { class: 'num' }, oneShot(entry)),
+          h('td', {}),
+        ),
+      )
+    }
+  }
+  return h(
+    'div',
+    { class: 'table-wrap' },
+    h(
+      'table',
+      {},
+      h(
+        'thead',
+        {},
+        h(
+          'tr',
+          {},
+          h('th', {}, 'Tanggal'),
+          h('th', { class: 'num' }, 'Biaya'),
+          h('th', { class: 'num' }, 'Calls'),
+          h('th', { class: 'num' }, 'Sesi'),
+          h('th', { class: 'num' }, 'One-shot'),
+          h('th', { class: 'num' }, 'Member aktif'),
+        ),
+      ),
+      h('tbody', {}, body),
+    ),
+  )
+}
+
 function tile(label, value, note, hero = false) {
   return h(
     'div',
@@ -357,7 +440,7 @@ function memberDetail(member) {
           h(
             'table',
             {},
-            h('thead', {}, h('tr', {}, h('th', {}, 'Nama'), h('th', {}, 'OS'), h('th', { class: 'num' }, 'Biaya'), h('th', {}, 'Kiriman terakhir'))),
+            h('thead', {}, h('tr', {}, h('th', {}, 'Nama'), h('th', {}, 'OS'), h('th', { class: 'num' }, 'Biaya'), h('th', {}, 'Kiriman terakhir'), h('th', {}, ''))),
             h(
               'tbody',
               {},
@@ -369,6 +452,7 @@ function memberDetail(member) {
                   h('td', {}, device.os || '—'),
                   h('td', { class: 'num' }, money(sum(summary.usage.filter((u) => u.deviceId === device.id), 'cost'))),
                   h('td', {}, dateTime(device.lastSeen)),
+                  h('td', {}, h('a', { class: 'btn', href: `u/?device=${encodeURIComponent(device.id)}` }, 'Usage & Context →')),
                 ),
               ),
             ),
@@ -506,21 +590,12 @@ function dashboardView() {
       { class: 'card chart', style: 'margin-bottom:12px' },
       h('h2', {}, `Biaya per hari · ${dayLabel(data.from)} – ${dayLabel(data.to)}`),
       columnChart(points),
-      h(
-        'details',
-        {},
-        h('summary', {}, 'Lihat sebagai tabel'),
-        h(
-          'div',
-          { class: 'table-wrap' },
-          h(
-            'table',
-            {},
-            h('thead', {}, h('tr', {}, h('th', {}, 'Tanggal'), h('th', { class: 'num' }, 'Biaya'), h('th', { class: 'num' }, 'Calls'))),
-            h('tbody', {}, points.filter((p) => p.calls).map((p) => h('tr', {}, h('td', {}, dayLabel(p.day)), h('td', { class: 'num' }, money(p.cost)), h('td', { class: 'num' }, count(p.calls))))),
-          ),
-        ),
-      ),
+    ),
+    h(
+      'div',
+      { class: 'card', style: 'margin-bottom:12px' },
+      h('h2', {}, 'Rekap harian · klik tanggal untuk rincian per member'),
+      dailyRecap(members),
     ),
     h(
       'div',

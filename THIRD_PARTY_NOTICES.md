@@ -6,6 +6,9 @@ Manaflow memakai perangkat lunak pihak ketiga berikut.
 
 https://github.com/getagentseal/codeburn
 
+Dipakai sebagai dependensi collector. Selain itu, `dashboard/app/` adalah salinan yang dimodifikasi dari
+dashboard web codeburn (`dash/`): tampilan Usage dan Context per member.
+
 MIT License
 
 Copyright (c) 2026 AgentSeal

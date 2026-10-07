@@ -102,6 +102,14 @@ Dua kelemahan codeburn 0.9.25 yang ditemukan saat uji coba, dan cara collector m
   `report --provider <tool>` memuat semuanya. Collector mengambil sesi dari `sessions`, dan
   ringkasan harian dari `report --provider` untuk tiap tool lalu menjumlahkannya.
 
+Akar masalah yang kedua (diselidiki 2026-10-07): cache harian codeburn
+(`~/.cache/codeburn/daily-cache.v34.json`) bisa kehilangan hari utuh tetapi tetap menandai dirinya
+lengkap, dan semua tampilan "all tools" membaca dari cache itu. Dengan folder cache yang baru,
+angkanya benar. Karena itu collector memakai folder cache codeburn miliknya sendiri
+(`~/.config/manaflow/cache`), dan tiap kiriman membandingkan riwayat harian di paket Usage dengan
+angka per-tool yang di-parse segar; bila berbeda, cache harian miliknya dihapus dan dihitung ulang.
+Cache codeburn milik member sendiri tidak disentuh.
+
 Karena itu angka di dashboard codeburn milik member bisa lebih kecil dari angka manaflow.
 
 Yang sengaja dibuang collector sebelum kirim: nama branch, tautan PR, dan path lokal project.
@@ -155,7 +163,23 @@ https://developers.cloudflare.com/d1/platform/pricing/
 
 ## 8. Dashboard
 
-Tampilan minimum:
+Dua tampilan (keputusan 2026-10-07):
+
+- **Ringkasan tim** di `/` (`dashboard/public/`, HTML/JS polos): total, tren, per model, per tool,
+  rekap harian (klik tanggal untuk rincian per member), tabel member, rincian member.
+- **Usage dan Context per member** di `/u/` (`dashboard/app/`, React): salinan dashboard web
+  codeburn dengan warna yang sama dan nama diganti Manaflow. Sidebar berisi daftar member; pemegang
+  akses memilih orang dan melihat Usage serta Context orang itu seperti di codeburn miliknya.
+  Yang dibuang dari aslinya: sharing/pairing device, dan filter "All tools" (paket data dikirim
+  untuk semua tool sekaligus; rincian per tool tetap ada di panel By Tool).
+
+Untuk tampilan kedua, collector mengirim paket Usage codeburn untuk enam periode (today dan week
+tiap kiriman; 30 hari, bulan, 6 bulan, lifetime tiap 6 jam) serta pohon Context untuk sesi yang
+berubah (maksimal 6 per kiriman). Sebelum dikirim dibuang: nama branch, tautan PR, sesi live,
+path folder lokal (nama file dan nama project tetap). Pohon Context hanya berisi jumlah token per
+jenis blok dan per tool, bukan isi percakapan.
+
+Tampilan minimum ringkasan tim:
 
 - Ringkasan tim untuk periode yang dipilih.
 - Per member, dengan rincian per device.
@@ -166,7 +190,8 @@ Tampilan minimum:
 ## 9. Yang diambil dan dibuang dari codeburn
 
 Dipakai: parser dan dedup sesi, pricing, klasifikasi 13 kategori task, one-shot rate,
-dan seluruh 41 provider.
+seluruh 41 provider, serta tampilan Usage dan Context dari dashboard web codeburn (disalin ke
+`dashboard/app/`).
 
 Tidak dipakai: aplikasi desktop (Electron), menu bar macOS, tray Windows, ekstensi GNOME,
 sharing dan pairing LAN, tampilan TUI, MCP server, guard, quota, plan, dan `optimize --apply`.
