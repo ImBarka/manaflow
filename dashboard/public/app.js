@@ -1,3 +1,5 @@
+import { dateTime, h } from './dom.js'
+
 const TOKEN_KEY = 'manaflow.token'
 const SVG_NS = 'http://www.w3.org/2000/svg'
 const PERIODS = [7, 30, 90]
@@ -8,24 +10,12 @@ const tooltip = document.getElementById('tooltip')
 const state = {
   token: localStorage.getItem(TOKEN_KEY) ?? '',
   days: 30,
-  team: '',
+  position: '',
   memberId: null,
   sort: 'cost',
   data: null,
   sessions: null,
   error: '',
-}
-
-// Every value from the server goes in as a text node, never as HTML.
-function h(tag, props = {}, ...children) {
-  const el = document.createElement(tag)
-  for (const [key, value] of Object.entries(props)) {
-    if (key === 'class') el.className = value
-    else if (key.startsWith('on')) el.addEventListener(key.slice(2), value)
-    else if (value != null && value !== false) el.setAttribute(key, value)
-  }
-  el.append(...children.flat().filter((child) => child != null && child !== false))
-  return el
 }
 
 function svg(tag, attrs = {}, ...children) {
@@ -42,7 +32,6 @@ const count = (v) => new Intl.NumberFormat('id-ID').format(v)
 const percent = (part, whole, digits = 0) => (whole > 0 ? `${((part / whole) * 100).toFixed(digits)}%` : '—')
 const localDay = (date) => date.toLocaleDateString('en-CA')
 const dayLabel = (day) => new Date(`${day}T00:00:00`).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })
-const dateTime = (iso) => (iso ? new Date(iso).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }) : '—')
 const titleCase = (text) => (text ? text[0].toUpperCase() + text.slice(1) : '—')
 
 function duration(ms) {
@@ -288,7 +277,7 @@ function membersTable(members) {
           'tr',
           {},
           sortHeader('Nama', 'name', false),
-          h('th', {}, 'Tim'),
+          h('th', {}, 'Posisi'),
           sortHeader('Biaya', 'cost'),
           sortHeader('Calls', 'calls'),
           sortHeader('Sesi', 'sessions'),
@@ -316,7 +305,7 @@ function membersTable(members) {
               },
             },
             h('td', {}, member.name, member.revoked ? h('span', { class: 'muted' }, ' (dicabut)') : null),
-            h('td', {}, member.team || '—'),
+            h('td', {}, member.position || '—'),
             h(
               'td',
               { class: 'num' },
@@ -347,7 +336,7 @@ function memberDetail(member) {
   return h(
     'section',
     {},
-    h('div', { class: 'bar' }, h('h1', {}, member.name), h('span', { class: 'muted' }, member.team || '')),
+    h('div', { class: 'bar' }, h('h1', {}, member.name), h('span', { class: 'muted' }, member.position || '')),
     h(
       'div',
       { class: 'grid two' },
@@ -465,8 +454,8 @@ function loginView() {
 
 function dashboardView() {
   const { data } = state
-  const teams = [...new Set(data.members.map((member) => member.team).filter(Boolean))].sort()
-  const members = data.members.filter((member) => !state.team || member.team === state.team)
+  const positions = [...new Set(data.members.map((member) => member.position).filter(Boolean))].sort()
+  const members = data.members.filter((member) => !state.position || member.position === state.position)
   const team = summarize(new Set(members.map((member) => member.id)))
   const active = new Set(team.usage.map((row) => row.memberId)).size
   const selected = members.find((member) => member.id === state.memberId)
@@ -495,9 +484,9 @@ function dashboardView() {
       ),
       h(
         'select',
-        { 'aria-label': 'Tim', onchange: (event) => { state.team = event.target.value; state.memberId = null; render() } },
-        h('option', { value: '' }, 'Semua tim'),
-        teams.map((name) => h('option', { value: name, selected: state.team === name ? '' : null }, name)),
+        { 'aria-label': 'Posisi', onchange: (event) => { state.position = event.target.value; state.memberId = null; render() } },
+        h('option', { value: '' }, 'Semua posisi'),
+        positions.map((name) => h('option', { value: name, selected: state.position === name ? '' : null }, name)),
       ),
       h('button', { class: 'btn', onclick: () => logout() }, 'Keluar'),
     ),

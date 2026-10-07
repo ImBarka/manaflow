@@ -59,24 +59,22 @@ async function isAdmin(request, env) {
 }
 
 async function createMember(request, env) {
-  if (!(await isAdmin(request, env))) return json(401, { error: 'unauthorized' })
   const body = await readJson(request)
   const name = str(body?.name, 80).trim()
   if (!name) return json(400, { error: 'name is required' })
-  const team = str(body.team, 80).trim()
+  const position = str(body.position, 80).trim()
 
   const token = newToken('mf')
   const row = await env.DB.prepare(
-    'INSERT INTO members (name, team, token_hash, created_at) VALUES (?, ?, ?, ?) RETURNING id',
+    'INSERT INTO members (name, position, token_hash, created_at) VALUES (?, ?, ?, ?) RETURNING id',
   )
-    .bind(name, team, await sha256Hex(token), new Date().toISOString())
+    .bind(name, position, await sha256Hex(token), new Date().toISOString())
     .first()
   // The token is returned once and never stored in clear.
-  return json(201, { id: row.id, name, team, token })
+  return json(201, { id: row.id, name, position, token })
 }
 
 async function createViewer(request, env) {
-  if (!(await isAdmin(request, env))) return json(401, { error: 'unauthorized' })
   const body = await readJson(request)
   const name = str(body?.name, 80).trim()
   if (!name) return json(400, { error: 'name is required' })
@@ -86,6 +84,86 @@ async function createViewer(request, env) {
     .bind(name, await sha256Hex(token), new Date().toISOString())
     .first()
   return json(201, { id: row.id, name, token })
+}
+
+async function listMembers(env) {
+  const rows = await env.DB.prepare(
+    `SELECT m.id, m.name, m.position, m.created_at AS createdAt, m.revoked_at AS revokedAt,
+            COUNT(d.id) AS devices, MAX(d.last_seen) AS lastSeen
+     FROM members m LEFT JOIN devices d ON d.member_id = m.id
+     GROUP BY m.id ORDER BY m.name COLLATE NOCASE`,
+  ).all()
+  return json(200, { members: rows.results })
+}
+
+async function updateMember(request, env, id) {
+  const body = await readJson(request)
+  const name = str(body?.name, 80).trim()
+  if (!name) return json(400, { error: 'name is required' })
+  const result = await env.DB.prepare('UPDATE members SET name = ?, position = ? WHERE id = ?')
+    .bind(name, str(body.position, 80).trim(), id)
+    .run()
+  return result.meta.changes ? json(200, { ok: true }) : json(404, { error: 'not found' })
+}
+
+// Issues a fresh token and lifts any revocation; the old token stops working.
+async function rotateMemberToken(env, id) {
+  const token = newToken('mf')
+  const result = await env.DB.prepare('UPDATE members SET token_hash = ?, revoked_at = NULL WHERE id = ?')
+    .bind(await sha256Hex(token), id)
+    .run()
+  return result.meta.changes ? json(200, { id, token }) : json(404, { error: 'not found' })
+}
+
+// Only for entries made by mistake: a member that has pushed data keeps it, and
+// is revoked instead.
+async function deleteMember(env, id) {
+  const device = await env.DB.prepare('SELECT 1 FROM devices WHERE member_id = ? LIMIT 1').bind(id).first()
+  if (device) return json(409, { error: 'member has devices; revoke instead' })
+  const result = await env.DB.prepare('DELETE FROM members WHERE id = ?').bind(id).run()
+  return result.meta.changes ? json(200, { ok: true }) : json(404, { error: 'not found' })
+}
+
+async function listViewers(env) {
+  const rows = await env.DB.prepare(
+    'SELECT id, name, created_at AS createdAt, revoked_at AS revokedAt FROM viewers ORDER BY name COLLATE NOCASE',
+  ).all()
+  return json(200, { viewers: rows.results })
+}
+
+async function revoke(env, table, id) {
+  const result = await env.DB.prepare(`UPDATE ${table} SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`)
+    .bind(new Date().toISOString(), id)
+    .run()
+  return json(200, { ok: true, changed: result.meta.changes > 0 })
+}
+
+const ADMIN_PATH = /^\/v1\/admin\/(members|viewers)(?:\/(\d+)(?:\/(revoke|token))?)?$/
+
+async function admin(request, env, [, kind, rawId, action]) {
+  if (!(await isAdmin(request, env))) return json(401, { error: 'unauthorized' })
+  const id = rawId ? Number(rawId) : null
+  const route = `${request.method} ${kind}${id ? '/:id' : ''}${action ? `/${action}` : ''}`
+  if (route === 'GET members') return listMembers(env)
+  if (route === 'POST members') return createMember(request, env)
+  if (route === 'POST members/:id') return updateMember(request, env, id)
+  if (route === 'DELETE members/:id') return deleteMember(env, id)
+  if (route === 'POST members/:id/revoke') return revoke(env, 'members', id)
+  if (route === 'POST members/:id/token') return rotateMemberToken(env, id)
+  if (route === 'GET viewers') return listViewers(env)
+  if (route === 'POST viewers') return createViewer(request, env)
+  if (route === 'POST viewers/:id/revoke') return revoke(env, 'viewers', id)
+  return json(404, { error: 'not found' })
+}
+
+const RETENTION_DAYS = 92
+
+async function purge(env, now = new Date()) {
+  const cutoff = new Date(now.getTime() - RETENTION_DAYS * 86_400_000).toISOString()
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM sessions WHERE ended_at != '' AND ended_at < ?").bind(cutoff),
+    env.DB.prepare('DELETE FROM daily WHERE day < ?').bind(cutoff.slice(0, 10)),
+  ])
 }
 
 async function isViewer(request, env) {
@@ -117,7 +195,7 @@ async function dashboard(request, env, url) {
   const { from, to } = range
 
   const [members, devices, daily, usage, sessions] = await env.DB.batch([
-    env.DB.prepare('SELECT id, name, team, revoked_at IS NOT NULL AS revoked FROM members'),
+    env.DB.prepare('SELECT id, name, position, revoked_at IS NOT NULL AS revoked FROM members'),
     env.DB.prepare('SELECT id, member_id AS memberId, name, os, collector_version AS version, last_seen AS lastSeen FROM devices'),
     env.DB.prepare(
       `SELECT day, member_id AS memberId, device_id AS deviceId, cost, calls, turns,
@@ -273,6 +351,8 @@ async function ingest(request, env) {
   return json(200, { accepted: statements.length - 1, rejected })
 }
 
+export { purge }
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url)
@@ -281,8 +361,12 @@ export default {
     if (route === 'POST /v1/ingest') return ingest(request, env)
     if (route === 'GET /v1/dashboard') return dashboard(request, env, url)
     if (route === 'GET /v1/sessions') return memberSessions(request, env, url)
-    if (route === 'POST /v1/admin/members') return createMember(request, env)
-    if (route === 'POST /v1/admin/viewers') return createViewer(request, env)
+    const adminRoute = url.pathname.match(ADMIN_PATH)
+    if (adminRoute) return admin(request, env, adminRoute)
     return json(404, { error: 'not found' })
+  },
+  // Daily cron: drop data past the retention window.
+  async scheduled(_event, env) {
+    await purge(env)
   },
 }

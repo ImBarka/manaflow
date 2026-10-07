@@ -312,6 +312,32 @@ details summary {
   margin-top: 8px;
 }
 
+/* Forms (admin) */
+.bar input,
+textarea {
+  padding: 6px 10px;
+  background: var(--page);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+textarea {
+  display: block;
+  width: 100%;
+  margin: 8px 0;
+  font: inherit;
+  color: inherit;
+}
+
+code {
+  font: 12px ui-monospace, Consolas, monospace;
+  user-select: all;
+}
+
+a.btn {
+  text-decoration: none;
+}
+
 /* Login */
 .login {
   max-width: 380px;

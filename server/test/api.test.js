@@ -4,7 +4,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { getPlatformProxy } from 'wrangler'
 
-import worker from '../src/index.js'
+import worker, { purge } from '../src/index.js'
 
 const ADMIN_TOKEN = 'test-admin-token'
 const DEVICE_A = '11111111-1111-4111-8111-111111111111'
@@ -35,7 +35,7 @@ function call(method, path, { token, body } = {}) {
 }
 
 async function createMember(name) {
-  const res = await call('POST', '/v1/admin/members', { token: ADMIN_TOKEN, body: { name, team: 'data' } })
+  const res = await call('POST', '/v1/admin/members', { token: ADMIN_TOKEN, body: { name, position: 'Data Engineer' } })
   assert.equal(res.status, 201)
   return res.json()
 }
@@ -199,4 +199,79 @@ test('dashboard rejects a malformed range', async () => {
   const viewer = await createViewer('Lead 2')
   assert.equal((await call('GET', '/v1/dashboard?from=yesterday&to=2026-08-31', { token: viewer.token })).status, 400)
   assert.equal((await call('GET', '/v1/dashboard?from=2026-09-01&to=2026-08-31', { token: viewer.token })).status, 400)
+})
+
+test('admin routes all require the admin token', async () => {
+  const member = await createMember('Plain')
+  for (const [method, path] of [['GET', '/v1/admin/members'], ['GET', '/v1/admin/viewers'], ['POST', `/v1/admin/members/${member.id}/revoke`]]) {
+    assert.equal((await call(method, path)).status, 401)
+    assert.equal((await call(method, path, { token: member.token })).status, 401)
+  }
+})
+
+test('a revoked member can no longer push, and a rotated token restores access', async () => {
+  const member = await createMember('Rotating')
+  const device = { id: '66666666-6666-4666-8666-666666666666', name: 'F' }
+  assert.equal((await call('POST', '/v1/ingest', { token: member.token, body: { device } })).status, 200)
+
+  assert.equal((await call('POST', `/v1/admin/members/${member.id}/revoke`, { token: ADMIN_TOKEN })).status, 200)
+  assert.equal((await call('POST', '/v1/ingest', { token: member.token, body: { device } })).status, 401)
+
+  const rotated = await (await call('POST', `/v1/admin/members/${member.id}/token`, { token: ADMIN_TOKEN })).json()
+  assert.notEqual(rotated.token, member.token)
+  assert.equal((await call('POST', '/v1/ingest', { token: member.token, body: { device } })).status, 401)
+  assert.equal((await call('POST', '/v1/ingest', { token: rotated.token, body: { device } })).status, 200)
+})
+
+test('admin can rename a member and sees device counts in the list', async () => {
+  const member = await createMember('Old Name')
+  const device = { id: '77777777-7777-4777-8777-777777777777', name: 'G' }
+  await call('POST', '/v1/ingest', { token: member.token, body: { device } })
+  assert.equal((await call('POST', `/v1/admin/members/${member.id}`, { token: ADMIN_TOKEN, body: { name: 'New Name', position: 'IT Support' } })).status, 200)
+  assert.equal((await call('POST', '/v1/admin/members/999999', { token: ADMIN_TOKEN, body: { name: 'x' } })).status, 404)
+
+  const { members } = await (await call('GET', '/v1/admin/members', { token: ADMIN_TOKEN })).json()
+  const row = members.find((m) => m.id === member.id)
+  assert.deepEqual({ name: row.name, position: row.position, devices: row.devices }, { name: 'New Name', position: 'IT Support', devices: 1 })
+  assert.ok(!('token_hash' in row) && !('tokenHash' in row))
+})
+
+test('a revoked dashboard token stops working', async () => {
+  const viewer = await createViewer('Temp')
+  assert.equal((await call('GET', '/v1/dashboard', { token: viewer.token })).status, 200)
+  assert.equal((await call('POST', `/v1/admin/viewers/${viewer.id}/revoke`, { token: ADMIN_TOKEN })).status, 200)
+  assert.equal((await call('GET', '/v1/dashboard', { token: viewer.token })).status, 401)
+})
+
+test('purge deletes data older than the retention window and keeps the rest', async () => {
+  const member = await createMember('Retention')
+  const device = { id: '88888888-8888-4888-8888-888888888888', name: 'H' }
+  const sessions = [
+    session({ sessionId: 'old', endedAt: '2026-01-01T00:00:00.000Z' }),
+    session({ sessionId: 'recent', endedAt: '2026-06-20T00:00:00.000Z' }),
+  ]
+  const daily = [{ day: '2026-01-01', cost: 1 }, { day: '2026-06-20', cost: 1 }]
+  await call('POST', '/v1/ingest', { token: member.token, body: { device, sessions, daily } })
+
+  await purge(env, new Date('2026-07-01T00:00:00.000Z'))
+
+  const left = await env.DB.prepare('SELECT session_id FROM sessions WHERE device_id = ?').bind(device.id).all()
+  assert.deepEqual(left.results.map((r) => r.session_id), ['recent'])
+  const days = await env.DB.prepare('SELECT day FROM daily WHERE device_id = ?').bind(device.id).all()
+  assert.deepEqual(days.results.map((r) => r.day), ['2026-06-20'])
+})
+
+test('a member can be deleted only while it has no device', async () => {
+  const empty = await createMember('Mistake')
+  const used = await createMember('Used')
+  await call('POST', '/v1/ingest', { token: used.token, body: { device: { id: '99999999-9999-4999-8999-999999999999', name: 'I' } } })
+
+  assert.equal((await call('DELETE', `/v1/admin/members/${empty.id}`)).status, 401)
+  assert.equal((await call('DELETE', `/v1/admin/members/${used.id}`, { token: ADMIN_TOKEN })).status, 409)
+  assert.equal((await call('DELETE', `/v1/admin/members/${empty.id}`, { token: ADMIN_TOKEN })).status, 200)
+  assert.equal((await call('DELETE', `/v1/admin/members/${empty.id}`, { token: ADMIN_TOKEN })).status, 404)
+
+  const { members } = await (await call('GET', '/v1/admin/members', { token: ADMIN_TOKEN })).json()
+  assert.ok(!members.some((m) => m.id === empty.id))
+  assert.ok(members.some((m) => m.id === used.id))
 })

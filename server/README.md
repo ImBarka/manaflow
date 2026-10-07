@@ -10,22 +10,22 @@ Cloudflare Worker (API) dan skema D1.
 | POST | `/v1/ingest` | Token member | Terima sesi dan ringkasan harian dari satu device |
 | GET | `/v1/dashboard?from&to` | Token dashboard | Agregat tim untuk rentang tanggal |
 | GET | `/v1/sessions?member&from&to` | Token dashboard | Daftar sesi satu member (maks 500) |
+| GET | `/v1/admin/members` | `ADMIN_TOKEN` | Daftar member, jumlah device, kiriman terakhir |
 | POST | `/v1/admin/members` | `ADMIN_TOKEN` | Buat member; token dikembalikan sekali saja |
+| POST | `/v1/admin/members/:id` | `ADMIN_TOKEN` | Ubah nama dan tim |
+| POST | `/v1/admin/members/:id/revoke` | `ADMIN_TOKEN` | Cabut token; data lama tetap ada |
+| POST | `/v1/admin/members/:id/token` | `ADMIN_TOKEN` | Token baru; token lama langsung tidak berlaku |
+| GET | `/v1/admin/viewers` | `ADMIN_TOKEN` | Daftar pemegang akses dashboard |
 | POST | `/v1/admin/viewers` | `ADMIN_TOKEN` | Buat pemegang akses dashboard; token dikembalikan sekali saja |
+| POST | `/v1/admin/viewers/:id/revoke` | `ADMIN_TOKEN` | Cabut akses dashboard |
 
 Token dikirim sebagai `Authorization: Bearer <token>`. Di database hanya hash SHA-256-nya yang disimpan.
 Token member berawalan `mf_`, token dashboard `mfv_`; keduanya tidak bisa saling menggantikan.
 
-Dashboard (`../dashboard/public`) disajikan sebagai file statis oleh Worker yang sama, di alamat `/`.
+Dashboard (`../dashboard/public`) disajikan sebagai file statis oleh Worker yang sama: `/` untuk
+dashboard, `/admin` untuk halaman admin (buat, ubah, dan cabut token member serta akses dashboard).
 
-Membuat member dan pemegang akses (belum ada halaman admin):
-
-```bash
-curl -X POST <url>/v1/admin/members -H "authorization: Bearer <ADMIN_TOKEN>" \
-  -H "content-type: application/json" -d '{"name":"Nama","team":"data"}'
-curl -X POST <url>/v1/admin/viewers -H "authorization: Bearer <ADMIN_TOKEN>" \
-  -H "content-type: application/json" -d '{"name":"Nama lead"}'
-```
+Cron harian (19:00 UTC) menghapus sesi dan ringkasan harian yang lebih tua dari 92 hari.
 
 Batas per kiriman: 256 KB, 50 sesi, 100 hari.
 
@@ -68,6 +68,4 @@ Token admin produksi tidak ada di repo. Di laptop pemilik proyek ia disimpan di 
 
 ## Belum ada
 
-- Cabut token member dan token dashboard.
-- Hapus otomatis data di atas 3 bulan.
 - Rate limit.

@@ -6,8 +6,8 @@ metadata sesi (bukan isi prompt) ke satu server tiap 30 menit; lead melihatnya d
 Dibangun di atas [codeburn](https://github.com/getagentseal/codeburn).
 
 Status: collector, jadwal otomatis, API, dan dashboard sudah berjalan. Server dan dashboard
-ter-deploy di https://manaflow.manaflow-server.workers.dev. Jadwal baru teruji di Windows;
-halaman admin belum ada.
+ter-deploy di https://manaflow.manaflow-server.workers.dev (halaman admin di `/admin`).
+Jadwal baru teruji di Windows; halaman admin belum pernah dicoba di browser.
 
 ## Coba di lokal
 

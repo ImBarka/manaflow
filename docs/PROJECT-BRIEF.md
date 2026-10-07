@@ -67,9 +67,9 @@ Tiga bagian dalam satu repo:
 | Tool | Semua 41 provider codeburn dipertahankan. Yang dipakai tim: Claude Code, Codex, Antigravity, Hermes |
 | Login dashboard | Token/password. Tidak pakai email, tidak pakai Cloudflare Access |
 | Akses dashboard | Hanya lead dan orang yang diberi akses |
-| Data member | Nama + tim. Email tidak dikumpulkan |
+| Data member | Nama + posisi (jabatan). Semua member satu tim (data & IT), jadi tidak ada pembagian tim. Email tidak dikumpulkan |
 | Retensi | 3 bulan |
-| Identitas member | Token dibuat admin dan sudah terikat ke nama + tim; member tidak mengetik nama. Nama device otomatis dari hostname, bisa diganti |
+| Identitas member | Token dibuat admin dan sudah terikat ke nama + posisi; member tidak mengetik nama. Nama device otomatis dari hostname, bisa diganti |
 | Token dashboard | Satu token per pemegang akses, supaya akses satu orang bisa dicabut tanpa mengganti milik yang lain |
 | Mesin collector | Paket `codeburn` sebagai dependensi, dipanggil lewat keluaran JSON-nya. Kode parser tidak disalin ke repo ini; pemangkasan dilakukan setelah alurnya terbukti |
 
@@ -187,7 +187,7 @@ Kewajiban lisensi: sertakan notice MIT codeburn di repo ini.
   server menyajikan paket collector sebagai file `.tgz`, lalu member memasang dari URL server.
   Belum diputuskan.
 - **Node di 27 laptop.** Perlu survei siapa yang belum punya Node 22.13 atau lebih baru.
-- **Daftar member** (nama + tim) sedang disiapkan pemilik proyek.
+- **Daftar member** (nama + posisi) ada di `docs/list_karyawan.md`, di-ignore git karena berisi nama asli.
 
 ## 11. Urutan pengerjaan
 
@@ -200,7 +200,8 @@ Kewajiban lisensi: sertakan notice MIT codeburn di repo ini.
 5. ✅ Dashboard: ringkasan tim, tren harian, per model, per tool, tabel member, rincian member
    (per model, kategori, tool, device, daftar sesi). Teruji di lokal dengan data asli satu laptop;
    belum pernah diuji dengan banyak member.
-6. Halaman admin.
+6. ✅ Halaman admin di `/admin` dan hapus otomatis data di atas 92 hari (cron harian). API-nya
+   teruji; halaman admin belum pernah dicoba di browser.
 7. Uji dengan dua laptop pemilik proyek, lalu 27 member.
 
 ## 12. Aturan kerja

@@ -2,6 +2,10 @@ name = "manaflow"
 main = "src/index.js"
 compatibility_date = "2025-01-01"
 
+# Retention purge, once a day at 19:00 UTC (02:00 WIB).
+[triggers]
+crons = ["0 19 * * *"]
+
 # The dashboard is served as static files; only /v1/* reaches the Worker.
 [assets]
 directory = "../dashboard/public"
