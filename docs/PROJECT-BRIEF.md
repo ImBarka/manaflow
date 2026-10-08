@@ -103,6 +103,12 @@ Dua kelemahan codeburn 0.9.25 yang ditemukan saat uji coba, dan cara collector m
   `report --provider <tool>` memuat semuanya. Collector mengambil sesi dari `sessions`, dan
   ringkasan harian dari `report --provider` untuk tiap tool lalu menjumlahkannya.
 
+Kelemahan ketiga (ditemukan 2026-10-08): `codeburn status --format menubar-json --no-optimize`
+menyimpan snapshot dan sengaja menahan pembaruan pada panggilan pertama setelah file sesi berubah
+(debounce untuk menu bar yang memanggilnya tiap beberapa detik). Collector yang jalan tiap 30
+menit selalu menjadi "panggilan pertama" itu, sehingga paket Usage tertinggal satu siklus dari
+data harian. Collector mematikan penahanan itu dengan `CODEBURN_STATUS_SNAPSHOT_SETTLE_MS=0`.
+
 Akar masalah yang kedua (diselidiki 2026-10-07): cache harian codeburn
 (`~/.cache/codeburn/daily-cache.v34.json`) bisa kehilangan hari utuh tetapi tetap menandai dirinya
 lengkap, dan semua tampilan "all tools" membaca dari cache itu. Dengan folder cache yang baru,

@@ -24,7 +24,16 @@ function codeburnBin() {
 async function codeburnJson(args) {
   const { stdout } = await run(process.execPath, [codeburnBin(), ...args], {
     maxBuffer: 256 * 1024 * 1024,
-    env: { ...process.env, NODE_OPTIONS: '--no-deprecation', CODEBURN_CACHE_DIR: cacheDir() },
+    env: {
+      ...process.env,
+      NODE_OPTIONS: '--no-deprecation',
+      CODEBURN_CACHE_DIR: cacheDir(),
+      // codeburn debounces its status snapshot for a menubar that polls every
+      // few seconds: the first call after a session file changes still returns
+      // the pre-change payload. A run every 30 minutes is always that first
+      // call, so without this the Usage view trails by a whole cycle.
+      CODEBURN_STATUS_SNAPSHOT_SETTLE_MS: '0',
+    },
     windowsHide: true,
   })
   return JSON.parse(stdout)
