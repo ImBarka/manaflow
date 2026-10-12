@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
 
-import { CHECK_INTERVAL_MS, dueForCheck, isNewer, isNpmInstall } from '../update.js'
+import { CHECK_INTERVAL_MS, dueForCheck, isNewer, isNpmInstall, newestRelease } from '../update.js'
 
 test('a version is newer only when a numeric part is higher', () => {
   assert.equal(isNewer('0.2.1', '0.2.0'), true)
@@ -24,4 +24,10 @@ test('only a copy under node_modules counts as an npm install', () => {
   assert.equal(isNpmInstall(join('C:', 'Users', 'a', 'AppData', 'Roaming', 'npm', 'node_modules', 'manaflow', 'collector')), true)
   assert.equal(isNpmInstall(join('E:', 'work', 'manaflow', 'collector')), false)
   assert.equal(isNpmInstall(), false, 'the test runs from a git checkout')
+})
+
+test('the newest release is the highest vX.Y.Z tag, ignoring anything else', () => {
+  assert.equal(newestRelease(['v0.2.1', 'v0.10.0', 'v0.9.3', 'nightly', 'v1.0', 'release-2', 'v0.2.1-beta']), '0.10.0')
+  assert.equal(newestRelease(['main', 'wip']), null)
+  assert.equal(newestRelease([]), null)
 })

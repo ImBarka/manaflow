@@ -142,12 +142,14 @@ Rincian sesi diringkas menjadi per hari + kategori task + model.
 - Batas pemulihan: Claude Code menghapus file sesi lokal setelah 30 hari. Data yang tidak
   terkirim dalam 30 hari tidak bisa dipulihkan.
 - Syarat: Node 22.13 atau lebih baru (syarat dari codeburn).
-- Pembaruan otomatis (sejak 0.2.0): sekali sehari, setelah data terkirim, collector membaca versi di
-  `package.json` branch `main` di GitHub dan menjalankan `npm install -g github:ImBarka/manaflow` bila
-  lebih baru. Hanya untuk salinan hasil `npm install -g`, bukan git checkout. Bisa dimatikan per
-  laptop (`manaflow autoupdate off`). Konsekuensi: apa pun yang masuk `main` akan terpasang di semua
-  laptop dalam sehari, jadi `main` hanya boleh berisi kode yang sudah teruji, dan nomor versi di
-  `package.json` harus dinaikkan tiap rilis collector (tanpa itu tidak ada yang ter-update).
+- Pembaruan (sejak 0.2.1): sekali sehari collector mengecek tag rilis `vX.Y.Z` di GitHub. Bawaannya
+  hanya memberi tahu (`manaflow status`, `push.log`, dan tanda "perlu update" di halaman tim); member
+  memasang dengan `manaflow update`. Pasang-otomatis ada sebagai pilihan per laptop
+  (`manaflow autoupdate on`), bawaan mati: satu akun GitHub tidak boleh bisa mengubah program di 27
+  laptop tanpa ada orang yang memicunya.
+- Rilis collector: naikkan `version` di `package.json`, jalankan `npm shrinkwrap` bila dependensi
+  berubah, merge ke `main`, lalu buat dan push tag `vX.Y.Z`. Update selalu memasang tag, bukan
+  ujung `main`. `npm-shrinkwrap.json` mengunci versi semua dependensi (163 paket).
 
 ## 7. Server
 

@@ -8,11 +8,12 @@ import { UserError } from './errors.js'
 
 const run = promisify(execFile)
 
-// Where `npm install -g` gets the collector from, and where the newest version
-// number is read. Whoever can push to this repository's main branch decides
-// what runs on every laptop that has auto-update on.
-const PACKAGE_SPEC = 'github:ImBarka/manaflow'
-const LATEST_URL = 'https://raw.githubusercontent.com/ImBarka/manaflow/main/package.json'
+// Releases are git tags named vX.Y.Z. Updating installs a tag, never the tip
+// of a branch, so merging to main does not by itself change what laptops run.
+// Whoever can push tags to this repository decides what an update installs.
+const REPOSITORY = 'ImBarka/manaflow'
+const TAGS_URL = `https://api.github.com/repos/${REPOSITORY}/tags?per_page=100`
+const RELEASE_TAG = /^v(\d+\.\d+\.\d+)$/
 export const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -36,10 +37,18 @@ export function isNpmInstall(path = here) {
   return path.split(sep).includes('node_modules')
 }
 
+// The highest released version among the given tag names, or null.
+export function newestRelease(tagNames) {
+  return tagNames
+    .map((name) => RELEASE_TAG.exec(name)?.[1])
+    .filter(Boolean)
+    .reduce((best, version) => (best && !isNewer(version, best) ? best : version), null)
+}
+
 export async function latestVersion() {
-  const res = await fetch(LATEST_URL, { signal: AbortSignal.timeout(15_000) })
+  const res = await fetch(TAGS_URL, { headers: { 'user-agent': 'manaflow' }, signal: AbortSignal.timeout(15_000) })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return (await res.json()).version
+  return newestRelease((await res.json()).map((tag) => tag.name))
 }
 
 // npm is run through its JavaScript entry point with the current Node, which
@@ -53,13 +62,13 @@ export function installedVersion() {
   return JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8')).version
 }
 
-// Installs the newest collector over this one. The running process keeps the
+// Installs the given release over this copy. The running process keeps the
 // code it already loaded; the next run starts the new version.
-export async function installLatest() {
+export async function install(version) {
   const cli = npmCli()
   if (!cli) throw new UserError('npm tidak ditemukan di samping Node; perbarui manual dengan `npm install -g github:ImBarka/manaflow`.')
   try {
-    await run(process.execPath, [cli, 'install', '-g', '--no-audit', '--no-fund', PACKAGE_SPEC], {
+    await run(process.execPath, [cli, 'install', '-g', '--no-audit', '--no-fund', `github:${REPOSITORY}#v${version}`], {
       timeout: 5 * 60_000,
       maxBuffer: 16 * 1024 * 1024,
       windowsHide: true,
@@ -70,10 +79,8 @@ export async function installLatest() {
   }
 }
 
-// Returns the version moved to, or null when there was nothing to do.
-export async function updateIfNewer(current) {
+// The released version newer than `current`, or null when up to date.
+export async function newerRelease(current) {
   const latest = await latestVersion()
-  if (!isNewer(latest, current)) return null
-  await installLatest()
-  return latest
+  return latest && isNewer(latest, current) ? latest : null
 }

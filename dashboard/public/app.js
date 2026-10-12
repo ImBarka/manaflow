@@ -119,6 +119,18 @@ async function loadSessions() {
   render()
 }
 
+function isOlder(version, than) {
+  const parts = (v) => String(v ?? '').split('.').map((part) => Number.parseInt(part, 10) || 0)
+  const [a, b] = [parts(version), parts(than)]
+  for (let i = 0; i < 3; i += 1) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) < (b[i] ?? 0)
+  return false
+}
+
+// The newest collector any device reports: the yardstick for "needs an update".
+function newestCollector() {
+  return state.data.devices.map((device) => device.version).reduce((best, v) => (isOlder(best, v) ? v : best), '')
+}
+
 function sum(rows, field) {
   return rows.reduce((total, row) => total + (row[field] ?? 0), 0)
 }
@@ -461,7 +473,7 @@ function memberDetail(member) {
                   'tr',
                   {},
                   h('td', {}, device.name),
-                  h('td', {}, `${device.os || '—'} · v${device.version || '?'}`),
+                  h('td', {}, `${device.os || '—'} · v${device.version || '?'}${isOlder(device.version, newestCollector()) ? ' (perlu update)' : ''}`),
                   h('td', { class: 'num' }, money(sum(summary.daily.filter((day) => day.deviceId === device.id), 'cost'))),
                   h('td', {}, dateTime(device.lastSeen)),
                   h('td', {}, h('a', { class: 'btn', href: `u/?device=${encodeURIComponent(device.id)}` }, 'Usage & Context →')),

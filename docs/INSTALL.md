@@ -68,19 +68,23 @@ Kiriman pertama memuat sekitar 35 hari terakhir dan bisa makan waktu hingga satu
 | `manaflow schedule off` | Hentikan kirim otomatis |
 | `manaflow schedule on` | Aktifkan lagi (jalankan juga setelah ganti versi Node) |
 | `manaflow update` | Perbarui ke versi terbaru sekarang |
-| `manaflow autoupdate off` | Matikan pembaruan otomatis (`on` untuk menyalakan lagi) |
+| `manaflow autoupdate on` | Pasang versi baru secara otomatis (bawaan: hanya diberi tahu) |
 | `manaflow uninstall` | Lepas jadwal dan hapus token dari laptop ini |
 
 ## Pembaruan
 
-Mulai versi 0.2.0 Manaflow memperbarui dirinya sendiri: sekali sehari, setelah mengirim data, ia
-mengecek versi terbaru di GitHub dan memasangnya bila ada. Kamu tidak perlu melakukan apa-apa.
+Manaflow tidak memperbarui dirinya sendiri. Sekali sehari ia mengecek apakah ada versi baru; kalau
+ada, `manaflow status` akan menyebutkannya. Pasang dengan:
 
-Artinya program di laptopmu bisa berubah tanpa kamu menjalankan perintah. Kalau tidak mau,
-matikan dengan `manaflow autoupdate off` dan perbarui sendiri dengan `manaflow update`.
+```bash
+manaflow update
+```
 
-Masih memakai versi di bawah 0.2.0? Jalankan sekali lagi perintah pasang di atas; setelah itu
-pembaruan berjalan otomatis.
+Token, login, dan jadwal tidak berubah. Kalau kamu lebih suka versi baru dipasang sendiri tanpa
+ditanya, jalankan `manaflow autoupdate on` (bisa dimatikan lagi dengan `off`).
+
+Masih memakai versi di bawah 0.2.1? Perintah `update` belum ada di sana; jalankan sekali lagi
+perintah pasang di bagian atas.
 
 ## Kalau ada masalah
 

@@ -1,13 +1,13 @@
 {
   "name": "manaflow",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "manaflow",
-      "version": "0.1.0",
-      "license": "UNLICENSED",
+      "version": "0.2.1",
+      "license": "MIT",
       "dependencies": {
         "codeburn": "0.9.25"
       },

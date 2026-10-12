@@ -7,7 +7,7 @@ import { configDir, loadConfig, loadState, removeAll, saveConfig, saveState } fr
 import { UserError } from './errors.js'
 import { MAX_SESSIONS_PER_REQUEST, chunk, dayKey, dayRollups, diff, sessionKey, toDay, toSession } from './payload.js'
 import { INTERVAL_MINUTES, installSchedule, removeSchedule, scheduleInstalled, schedulerLabel } from './schedule.js'
-import { dueForCheck, installedVersion, isNpmInstall, updateIfNewer } from './update.js'
+import { dueForCheck, install, installedVersion, isNewer, isNpmInstall, newerRelease } from './update.js'
 import {
   CONTEXT_BATCH,
   CONTEXT_BUDGET_MS,
@@ -36,8 +36,8 @@ Manaflow mengirim data pemakaian AI coding dari laptop ini ke dashboard tim.
   Tidak dikirim : isi prompt, jawaban model, kode, isi file.
   Dilihat oleh  : lead dan orang yang diberi akses dashboard.
   Disimpan      : 3 bulan.
-  Pembaruan     : program ini memperbarui dirinya sendiri dari GitHub, dicek
-                  sekali sehari. Matikan dengan \`manaflow autoupdate off\`.
+  Pembaruan     : tidak otomatis. Manaflow hanya memberi tahu bila ada versi
+                  baru; kamu yang memasangnya dengan \`manaflow update\`.
 
 Judul sesi dan nama project ikut terkirim apa adanya.
 `
@@ -112,7 +112,7 @@ export async function login(args, { version, out }) {
     deviceId: previous?.deviceId ?? randomUUID(),
     deviceName: flag(args, '--name') ?? previous?.deviceName ?? hostname(),
     version,
-    autoUpdate: args.includes('--no-auto-update') ? false : (previous?.autoUpdate ?? true),
+    autoUpdate: args.includes('--auto-update') ? true : (previous?.autoUpdate ?? false),
   }
   // Registers the device and proves the token works before anything is saved.
   await post(config, '/v1/ingest', { device: device(config) })
@@ -179,28 +179,43 @@ export async function push(_args, { version, out }) {
     saveState(state)
   }
 
-  await autoUpdate(config, state, version, out)
+  await checkForUpdate(config, state, version, out)
 }
 
-// Once a day, after the data is safely sent: move to the newest collector if
-// there is one. A failure is reported and otherwise ignored, so a laptop that
-// cannot update keeps pushing with the version it has.
-async function autoUpdate(config, state, version, out) {
-  if (config.autoUpdate === false || !isNpmInstall() || !dueForCheck(state.updateCheckedAt)) return
+// Once a day, after the data is safely sent: see whether a newer release
+// exists. By default this only says so; installing is the member's call
+// (`manaflow update`), unless they turned auto-update on. A failure here is
+// reported and otherwise ignored.
+async function checkForUpdate(config, state, version, out) {
+  if (!dueForCheck(state.updateCheckedAt)) return
   state.updateCheckedAt = Date.now()
-  saveState(state)
   try {
-    const moved = await updateIfNewer(version)
-    if (moved) out(`Collector diperbarui: ${version} -> ${moved}. Berlaku mulai kiriman berikutnya.\n`)
+    const latest = await newerRelease(version)
+    state.latestVersion = latest ?? version
+    if (!latest) return
+    if (config.autoUpdate === true && isNpmInstall()) {
+      await install(latest)
+      out(`Collector diperbarui: ${version} -> ${latest}. Berlaku mulai kiriman berikutnya.\n`)
+    } else {
+      out(`Versi baru tersedia: ${latest} (terpasang ${version}). Perbarui dengan \`manaflow update\`.\n`)
+    }
   } catch (err) {
-    out(`Cek pembaruan gagal: ${err.message}\n`)
+    out(`Cek versi gagal: ${err.message}\n`)
+  } finally {
+    saveState(state)
   }
 }
 
 export async function update(_args, { version, out }) {
   if (!isNpmInstall()) throw new UserError('Ini salinan dari git, bukan hasil `npm install -g`; perbarui dengan `git pull`.')
-  const moved = await updateIfNewer(version)
-  out(moved ? `Diperbarui: ${version} -> ${moved}.\n` : `Sudah versi terbaru (${version}).\n`)
+  const latest = await newerRelease(version)
+  if (!latest) {
+    out(`Sudah versi terbaru (${version}).\n`)
+    return
+  }
+  await install(latest)
+  saveState({ ...loadState(), latestVersion: latest })
+  out(`Diperbarui: ${version} -> ${latest}.\n`)
 }
 
 export async function autoupdate(args, { out }) {
@@ -209,7 +224,11 @@ export async function autoupdate(args, { out }) {
   const [action] = args
   if (action !== 'on' && action !== 'off') throw new UserError('Pemakaian: manaflow autoupdate on|off')
   saveConfig({ ...config, autoUpdate: action === 'on' })
-  out(action === 'on' ? 'Pembaruan otomatis aktif: dicek sekali sehari.\n' : 'Pembaruan otomatis mati. Perbarui manual dengan `manaflow update`.\n')
+  out(
+    action === 'on'
+      ? 'Pembaruan otomatis aktif: versi baru dipasang sendiri, dicek sekali sehari.\n'
+      : 'Pembaruan otomatis mati. Manaflow hanya memberi tahu bila ada versi baru; pasang dengan `manaflow update`.\n',
+  )
 }
 
 // The `today` payload, with codeburn's daily history rebuilt first if it
@@ -283,6 +302,7 @@ export async function status(_args, { out }) {
   }
   const state = loadState()
   const sessions = Object.keys(state.sent).filter((key) => key.startsWith('s:')).length
+  const newer = state.latestVersion && isNewer(state.latestVersion, installedVersion()) ? state.latestVersion : null
   const scheduled = scheduleInstalled() ? `aktif, tiap ${INTERVAL_MINUTES} menit (${schedulerLabel()})` : 'tidak terpasang'
   out(
     `Server        : ${config.serverUrl}\n` +
@@ -290,7 +310,8 @@ export async function status(_args, { out }) {
       `Token         : ${config.token.slice(0, 6)}…\n` +
       `Kiriman akhir : ${state.lastPush ?? 'belum pernah'}\n` +
       `Sesi terlacak : ${sessions}\n` +
-      `Versi         : ${installedVersion()}${config.autoUpdate === false ? ' (pembaruan otomatis mati)' : ' (pembaruan otomatis aktif)'}\n` +
+      `Versi         : ${installedVersion()}${newer ? ` (versi ${newer} tersedia: jalankan \`manaflow update\`)` : ' (terbaru)'}\n` +
+      `Pembaruan     : ${config.autoUpdate === true ? 'otomatis' : 'manual, dengan pemberitahuan'}\n` +
       `Jadwal        : ${scheduled}\n` +
       `Folder config : ${configDir()}\n`,
   )
