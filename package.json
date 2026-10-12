@@ -1,6 +1,6 @@
 {
   "name": "manaflow",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "description": "Team AI coding usage collector and dashboard, built on codeburn",
   "type": "module",
@@ -11,7 +11,8 @@
     "collector",
     "!collector/test",
     "LICENSE",
-    "THIRD_PARTY_NOTICES.md"
+    "THIRD_PARTY_NOTICES.md",
+    "npm-shrinkwrap.json"
   ],
   "scripts": {
     "test": "node --test \"collector/test/*.test.js\""
