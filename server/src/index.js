@@ -146,10 +146,12 @@ async function deleteMember(env, id) {
 // The member a token belongs to, through either its original or an extra token.
 async function memberByToken(env, token) {
   const hash = await sha256Hex(token)
+  // Two indexed lookups rather than one OR, which scans every member.
+  const direct = await env.DB.prepare('SELECT id FROM members WHERE token_hash = ? AND revoked_at IS NULL').bind(hash).first()
+  if (direct) return direct
   return env.DB.prepare(
-    `SELECT id FROM members
-     WHERE revoked_at IS NULL
-       AND (token_hash = ?1 OR id IN (SELECT member_id FROM member_tokens WHERE token_hash = ?1))`,
+    `SELECT m.id FROM member_tokens t JOIN members m ON m.id = t.member_id
+     WHERE t.token_hash = ? AND m.revoked_at IS NULL`,
   )
     .bind(hash)
     .first()
@@ -227,48 +229,26 @@ async function dashboard(request, env, url) {
   if (!range) return json(400, { error: 'from and to must be YYYY-MM-DD, from <= to' })
   const { from, to } = range
 
-  const [members, devices, daily, usage, sessions, sessionDays] = await env.DB.batch([
+  // One row per device and day, already rolled up by the collector. Reading the
+  // sessions table here instead costs a row per session, segment and model on
+  // every page view, which is what used up the free plan's daily read allowance.
+  const [members, devices, daily] = await env.DB.batch([
     env.DB.prepare('SELECT id, name, position, revoked_at IS NOT NULL AS revoked FROM members'),
     env.DB.prepare('SELECT id, member_id AS memberId, name, os, collector_version AS version, last_seen AS lastSeen FROM devices'),
     env.DB.prepare(
       `SELECT day, member_id AS memberId, device_id AS deviceId, cost, calls, turns,
-              edit_turns AS editTurns, one_shot_turns AS oneShotTurns
+              edit_turns AS editTurns, one_shot_turns AS oneShotTurns, sessions,
+              sessions_started AS sessionsStarted, input_tokens AS inputTokens,
+              cache_read_tokens AS cacheReadTokens, breakdown
        FROM daily WHERE day BETWEEN ? AND ?`,
     ).bind(from, to),
-    env.DB.prepare(
-      `SELECT s.member_id AS memberId, s.device_id AS deviceId, s.provider,
-              json_extract(seg.value, '$.category') AS category, m.key AS model,
-              SUM(json_extract(m.value, '$.cost')) AS cost, SUM(json_extract(m.value, '$.calls')) AS calls,
-              SUM(json_extract(m.value, '$.inputTokens')) AS inputTokens,
-              SUM(json_extract(m.value, '$.outputTokens')) AS outputTokens
-       FROM sessions s, json_each(s.segments) seg, json_each(json_extract(seg.value, '$.models')) m
-       WHERE json_extract(seg.value, '$.day') BETWEEN ? AND ?
-       GROUP BY 1, 2, 3, 4, 5`,
-    ).bind(from, to),
-    env.DB.prepare(
-      `SELECT s.member_id AS memberId, s.device_id AS deviceId, COUNT(*) AS sessions,
-              SUM(s.input_tokens) AS inputTokens, SUM(s.cache_read_tokens) AS cacheReadTokens,
-              SUM(s.cache_write_tokens) AS cacheWriteTokens
-       FROM sessions s WHERE ${IN_RANGE} GROUP BY 1, 2`,
-    ).bind(from, to),
-    // Sessions active on each day, for the daily recap.
-    env.DB.prepare(
-      `SELECT s.member_id AS memberId, json_extract(seg.value, '$.day') AS day,
-              COUNT(DISTINCT s.device_id || '/' || s.provider || '/' || s.session_id) AS sessions
-       FROM sessions s, json_each(s.segments) seg
-       WHERE json_extract(seg.value, '$.day') BETWEEN ? AND ? GROUP BY 1, 2`,
-    ).bind(from, to),
   ])
-  return json(200, {
-    from,
-    to,
-    members: members.results,
-    devices: devices.results,
-    daily: daily.results,
-    usage: usage.results,
-    sessions: sessions.results,
-    sessionDays: sessionDays.results,
-  })
+  // `breakdown` is stored as JSON text; it is spliced in as is rather than
+  // parsed and re-serialised, to stay inside the CPU budget. The browser
+  // does the per-model and per-tool sums.
+  const days = daily.results.map(({ breakdown, ...row }) => `${JSON.stringify(row).slice(0, -1)},"breakdown":${breakdown ?? 'null'}}`)
+  const head = JSON.stringify({ from, to, members: members.results, devices: devices.results })
+  return new Response(`${head.slice(0, -1)},"daily":[${days.join(',')}]}`, { headers: { 'content-type': 'application/json' } })
 }
 
 async function memberSessions(request, env, url) {
@@ -334,17 +314,34 @@ function sessionStatement(db, memberId, deviceId, s, now) {
     )
 }
 
+const MAX_BREAKDOWN_BYTES = 16 * 1024
+
 function dailyStatement(db, memberId, deviceId, d, now) {
   if (!DAY.test(d?.day ?? '')) return null
+  // The rollup fields are optional: an older collector does not send them, and
+  // a newer one omits the token counts when it could not read them. COALESCE
+  // keeps what is already stored instead of blanking it.
+  const breakdown = Array.isArray(d.breakdown) ? JSON.stringify(d.breakdown) : null
+  if (breakdown && breakdown.length > MAX_BREAKDOWN_BYTES) return null
+  const optional = (value) => (typeof value === 'number' ? int(value) : null)
   return db
     .prepare(
-      `INSERT INTO daily (device_id, day, member_id, cost, calls, turns, edit_turns, one_shot_turns, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO daily (device_id, day, member_id, cost, calls, turns, edit_turns, one_shot_turns, updated_at,
+         sessions, sessions_started, input_tokens, cache_read_tokens, breakdown)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (device_id, day) DO UPDATE SET
          cost = excluded.cost, calls = excluded.calls, turns = excluded.turns, edit_turns = excluded.edit_turns,
-         one_shot_turns = excluded.one_shot_turns, updated_at = excluded.updated_at`,
+         one_shot_turns = excluded.one_shot_turns, updated_at = excluded.updated_at,
+         sessions = CASE WHEN excluded.breakdown IS NULL THEN daily.sessions ELSE excluded.sessions END,
+         sessions_started = CASE WHEN excluded.breakdown IS NULL THEN daily.sessions_started ELSE excluded.sessions_started END,
+         input_tokens = COALESCE(excluded.input_tokens, daily.input_tokens),
+         cache_read_tokens = COALESCE(excluded.cache_read_tokens, daily.cache_read_tokens),
+         breakdown = COALESCE(excluded.breakdown, daily.breakdown)`,
     )
-    .bind(deviceId, d.day, memberId, num(d.cost), int(d.calls), int(d.turns), int(d.editTurns), int(d.oneShotTurns), now)
+    .bind(
+      deviceId, d.day, memberId, num(d.cost), int(d.calls), int(d.turns), int(d.editTurns), int(d.oneShotTurns), now,
+      int(d.sessions), int(d.sessionsStarted), optional(d.inputTokens), optional(d.cacheReadTokens), breakdown,
+    )
 }
 
 async function ingest(request, env) {
@@ -502,7 +499,17 @@ async function contextTree(request, env, url) {
 export { purge }
 
 export default {
+  // A database failure (most likely the plan's daily allowance running out) is
+  // answered as 503 with its reason, so the collector's log says why a push
+  // failed. The collector keeps what it could not send and retries next run.
   async fetch(request, env) {
+    try {
+      return await this.route(request, env)
+    } catch (err) {
+      return json(503, { error: `database unavailable: ${String(err?.message ?? err).slice(0, 200)}` })
+    }
+  },
+  async route(request, env) {
     const url = new URL(request.url)
     const route = `${request.method} ${url.pathname}`
     if (route === 'GET /v1/health') return json(200, { ok: true })

@@ -68,7 +68,56 @@ export function mergeDaily(dailyLists) {
   return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date))
 }
 
-export function toDay(row) {
+// Rolls the sessions (as built by toSession) up per day, so the server can
+// answer the team page from one row per device and day instead of scanning
+// every session: how many sessions were active, how many began that day, and
+// cost and calls per tool, model and task category.
+export function dayRollups(sessions) {
+  const days = new Map()
+  const rollup = (day) => {
+    let entry = days.get(day)
+    if (!entry) {
+      entry = { sessions: 0, sessionsStarted: 0, rows: new Map() }
+      days.set(day, entry)
+    }
+    return entry
+  }
+  for (const session of sessions) {
+    const active = [...new Set(session.segments.map((seg) => seg.day))].sort()
+    active.forEach((day, index) => {
+      const entry = rollup(day)
+      entry.sessions += 1
+      if (index === 0) entry.sessionsStarted += 1
+    })
+    for (const seg of session.segments) {
+      const { rows } = rollup(seg.day)
+      for (const [model, usage] of Object.entries(seg.models)) {
+        const key = `${session.provider}|${model}|${seg.category}`
+        const row = rows.get(key) ?? { provider: session.provider, model, category: seg.category, cost: 0, calls: 0, inputTokens: 0, outputTokens: 0 }
+        row.cost += usage.cost
+        row.calls += usage.calls
+        row.inputTokens += usage.inputTokens
+        row.outputTokens += usage.outputTokens
+        rows.set(key, row)
+      }
+    }
+  }
+  return new Map(
+    [...days].map(([day, entry]) => [
+      day,
+      {
+        sessions: entry.sessions,
+        sessionsStarted: entry.sessionsStarted,
+        breakdown: [...entry.rows.values()].map((row) => ({ ...row, cost: round(row.cost, 6) })).sort((a, b) => b.cost - a.cost),
+      },
+    ]),
+  )
+}
+
+// `rollup` comes from dayRollups. `tokens` is that day's entry in codeburn's
+// usage history; it is left out when the history could not be read, and the
+// server then keeps the token counts it already has.
+export function toDay(row, rollup, tokens) {
   return {
     day: row.date,
     cost: round(row.cost, 6),
@@ -76,6 +125,10 @@ export function toDay(row) {
     turns: row.turns ?? 0,
     editTurns: row.editTurns ?? 0,
     oneShotTurns: row.oneShotTurns ?? 0,
+    sessions: rollup?.sessions ?? 0,
+    sessionsStarted: rollup?.sessionsStarted ?? 0,
+    breakdown: rollup?.breakdown ?? [],
+    ...(tokens ? { inputTokens: tokens.inputTokens ?? 0, cacheReadTokens: tokens.cacheReadTokens ?? 0 } : {}),
   }
 }
 

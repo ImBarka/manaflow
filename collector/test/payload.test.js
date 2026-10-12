@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { chunk, diff, mergeDaily, mergeSegments, toDay, toSession } from '../payload.js'
+import { chunk, dayRollups, diff, mergeDaily, mergeSegments, toDay, toSession } from '../payload.js'
 
 const row = {
   sessionId: 'abc',
@@ -60,6 +60,9 @@ test('a report day maps to the server field names', () => {
     turns: 2,
     editTurns: 1,
     oneShotTurns: 1,
+    sessions: 0,
+    sessionsStarted: 0,
+    breakdown: [],
   })
 })
 
@@ -100,4 +103,40 @@ test('diff resends a session that grew and forgets ones outside the window', () 
 test('chunk splits into batches of the given size', () => {
   assert.deepEqual(chunk([1, 2, 3, 4, 5], 2), [[1, 2], [3, 4], [5]])
   assert.deepEqual(chunk([], 2), [])
+})
+
+test('days are rolled up per tool, model and category, with session counts', () => {
+  const model = (cost, calls) => ({ cost, calls, inputTokens: calls, outputTokens: calls * 2 })
+  const sessions = [
+    {
+      provider: 'claude',
+      segments: [
+        { day: '2026-10-05', category: 'coding', models: { 'Opus 5': model(2, 4) } },
+        { day: '2026-10-06', category: 'coding', models: { 'Opus 5': model(1, 1), 'Sonnet 5.5': model(0.5, 2) } },
+      ],
+    },
+    { provider: 'claude', segments: [{ day: '2026-10-06', category: 'coding', models: { 'Opus 5': model(3, 5) } }] },
+    { provider: 'codex', segments: [{ day: '2026-10-06', category: 'debugging', models: { 'gpt-5': model(4, 1) } }] },
+  ]
+  const rollups = dayRollups(sessions)
+
+  assert.deepEqual({ ...rollups.get('2026-10-05'), breakdown: undefined }, { sessions: 1, sessionsStarted: 1, breakdown: undefined })
+  const day = rollups.get('2026-10-06')
+  // The first session began the day before, so it is active here but not started here.
+  assert.deepEqual([day.sessions, day.sessionsStarted], [3, 2])
+  assert.deepEqual(day.breakdown, [
+    { provider: 'claude', model: 'Opus 5', category: 'coding', cost: 4, calls: 6, inputTokens: 6, outputTokens: 12 },
+    { provider: 'codex', model: 'gpt-5', category: 'debugging', cost: 4, calls: 1, inputTokens: 1, outputTokens: 2 },
+    { provider: 'claude', model: 'Sonnet 5.5', category: 'coding', cost: 0.5, calls: 2, inputTokens: 2, outputTokens: 4 },
+  ])
+})
+
+test('a day carries its rollup and token counts, and omits the tokens when unknown', () => {
+  const row = { date: '2026-10-06', cost: 1.5, calls: 3, turns: 2, editTurns: 1, oneShotTurns: 1 }
+  const rollup = { sessions: 2, sessionsStarted: 1, breakdown: [{ provider: 'claude', model: 'Opus 5', category: 'coding', cost: 1.5, calls: 3, inputTokens: 1, outputTokens: 2 }] }
+  const withTokens = toDay(row, rollup, { date: '2026-10-06', inputTokens: 10, cacheReadTokens: 990, cost: 1.5 })
+  assert.deepEqual([withTokens.sessions, withTokens.sessionsStarted, withTokens.inputTokens, withTokens.cacheReadTokens], [2, 1, 10, 990])
+  assert.deepEqual(withTokens.breakdown, rollup.breakdown)
+  const without = toDay(row, rollup, undefined)
+  assert.ok(!('inputTokens' in without) && !('cacheReadTokens' in without))
 })

@@ -155,7 +155,7 @@ test('dashboard and sessions reject a member token and a missing token', async (
   assert.equal((await call('GET', '/v1/sessions?member=1', { token: member.token })).status, 401)
 })
 
-test('dashboard aggregates usage per member, model and category inside the range', async () => {
+test('dashboard returns the rolled-up days inside the range, and sessions lists the member sessions', async () => {
   const member = await createMember('Dewi')
   const viewer = await createViewer('Lead')
   const device = { id: '55555555-5555-4555-8555-555555555555', name: 'LAPTOP-E', os: 'darwin', version: '0.1.0' }
@@ -169,9 +169,10 @@ test('dashboard aggregates usage per member, model and category inside the range
     }),
     session({ sessionId: 'out-of-range', segments: [{ day: '2026-07-01', category: 'coding', models: { 'Opus 5': { cost: 99, calls: 9, inputTokens: 0, outputTokens: 0 } } }] }),
   ]
+  const breakdown = [{ provider: 'claude', model: 'Opus 5', category: 'coding', cost: 2, calls: 4, inputTokens: 10, outputTokens: 20 }]
   const daily = [
-    { day: '2026-08-10', cost: 2, calls: 4, turns: 2, editTurns: 2, oneShotTurns: 1 },
-    { day: '2026-07-01', cost: 99, calls: 9, turns: 1, editTurns: 0, oneShotTurns: 0 },
+    { day: '2026-08-10', cost: 2, calls: 4, turns: 2, editTurns: 2, oneShotTurns: 1, sessions: 1, sessionsStarted: 1, inputTokens: 10, cacheReadTokens: 990, breakdown },
+    { day: '2026-07-01', cost: 99, calls: 9, turns: 1, editTurns: 0, oneShotTurns: 0, sessions: 1, sessionsStarted: 1, breakdown: [] },
   ]
   assert.equal((await call('POST', '/v1/ingest', { token: member.token, body: { device, sessions, daily } })).status, 200)
 
@@ -179,13 +180,14 @@ test('dashboard aggregates usage per member, model and category inside the range
   assert.equal(res.status, 200)
   const data = await res.json()
 
-  const usage = data.usage.filter((u) => u.memberId === member.id)
-  const opus = usage.find((u) => u.model === 'Opus 5')
-  assert.deepEqual({ cost: opus.cost, calls: opus.calls, provider: opus.provider, category: opus.category }, { cost: 3, calls: 5, provider: 'claude', category: 'coding' })
-  assert.equal(usage.find((u) => u.model === 'Sonnet 5.5').cost, 0.5)
-
-  assert.deepEqual(data.daily.filter((d) => d.memberId === member.id).map((d) => d.day), ['2026-08-10'])
-  assert.equal(data.sessions.find((s) => s.memberId === member.id).sessions, 1)
+  const days = data.daily.filter((d) => d.memberId === member.id)
+  assert.deepEqual(days, [
+    {
+      day: '2026-08-10', memberId: member.id, deviceId: device.id, cost: 2, calls: 4, turns: 2, editTurns: 2, oneShotTurns: 1,
+      sessions: 1, sessionsStarted: 1, inputTokens: 10, cacheReadTokens: 990, breakdown,
+    },
+  ])
+  assert.ok(!('usage' in data) && !('sessionDays' in data), 'no per-session aggregation on this endpoint')
   assert.ok(data.members.some((m) => m.id === member.id && m.name === 'Dewi'))
   assert.ok(data.devices.some((d) => d.id === device.id && d.name === 'LAPTOP-E'))
 
@@ -309,17 +311,40 @@ test('usage payloads and context trees are stored per device and readable only b
   assert.deepEqual(got, tree)
 })
 
-test('dashboard reports how many sessions each member had per day', async () => {
-  const member = await createMember('PerDay')
+test('a day pushed without the rollup keeps the rollup already stored for it', async () => {
+  const member = await createMember('OldCollector')
   const viewer = await createViewer('Lead 4')
   const device = { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', name: 'K' }
-  const seg = (day) => ({ day, category: 'coding', models: { 'Opus 5': { cost: 1, calls: 1, inputTokens: 1, outputTokens: 1 } } })
-  const sessions = [
-    session({ sessionId: 'a', segments: [seg('2026-08-20'), seg('2026-08-21')] }),
-    session({ sessionId: 'b', segments: [seg('2026-08-21')] }),
-  ]
-  await call('POST', '/v1/ingest', { token: member.token, body: { device, sessions } })
+  const breakdown = [{ provider: 'claude', model: 'Opus 5', category: 'coding', cost: 1, calls: 1, inputTokens: 1, outputTokens: 1 }]
+  const full = { day: '2026-08-20', cost: 1, calls: 1, sessions: 2, sessionsStarted: 1, inputTokens: 5, cacheReadTokens: 95, breakdown }
+  await call('POST', '/v1/ingest', { token: member.token, body: { device, daily: [full] } })
+  // An older collector, or a run that could not read the token counts.
+  await call('POST', '/v1/ingest', { token: member.token, body: { device, daily: [{ day: '2026-08-20', cost: 1.5, calls: 2 }] } })
+
   const data = await (await call('GET', '/v1/dashboard?from=2026-08-01&to=2026-08-31', { token: viewer.token })).json()
-  const mine = data.sessionDays.filter((d) => d.memberId === member.id).sort((x, y) => x.day.localeCompare(y.day))
-  assert.deepEqual(mine.map((d) => [d.day, d.sessions]), [['2026-08-20', 1], ['2026-08-21', 2]])
+  const [day] = data.daily.filter((d) => d.memberId === member.id)
+  assert.deepEqual(
+    { cost: day.cost, calls: day.calls, sessions: day.sessions, sessionsStarted: day.sessionsStarted, inputTokens: day.inputTokens, cacheReadTokens: day.cacheReadTokens, breakdown: day.breakdown },
+    { cost: 1.5, calls: 2, sessions: 2, sessionsStarted: 1, inputTokens: 5, cacheReadTokens: 95, breakdown },
+  )
+})
+
+test('a day never rolled up has a null breakdown', async () => {
+  const member = await createMember('NeverRolled')
+  const viewer = await createViewer('Lead 5')
+  const device = { id: 'acacacac-acac-4cac-8cac-acacacacacac', name: 'O' }
+  await call('POST', '/v1/ingest', { token: member.token, body: { device, daily: [{ day: '2026-08-22', cost: 3, calls: 4 }] } })
+  const data = await (await call('GET', '/v1/dashboard?from=2026-08-01&to=2026-08-31', { token: viewer.token })).json()
+  assert.equal(data.daily.find((d) => d.memberId === member.id).breakdown, null)
+})
+
+test('the dashboard reads one row per device-day, not per session', async () => {
+  const viewer = await createViewer('Lead 6')
+  const res = await env.DB.prepare(
+    `SELECT day, breakdown FROM daily WHERE day BETWEEN ? AND ?`,
+  ).bind('2026-08-01', '2026-08-31').all()
+  const inRange = res.results.length
+  const sessions = (await env.DB.prepare('SELECT COUNT(*) AS n FROM sessions').first()).n
+  assert.ok(res.meta.rows_read <= inRange + 5, `read ${res.meta.rows_read} rows for ${inRange} days (sessions table has ${sessions})`)
+  assert.equal((await call('GET', '/v1/dashboard?from=2026-08-01&to=2026-08-31', { token: viewer.token })).status, 200)
 })

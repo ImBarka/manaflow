@@ -5,8 +5,9 @@ import { createInterface } from 'node:readline/promises'
 import { collect, collectionWindow, contextTree, resetDailyCache, usagePayload } from './codeburn.js'
 import { configDir, loadConfig, loadState, removeAll, saveConfig, saveState } from './config.js'
 import { UserError } from './errors.js'
-import { MAX_SESSIONS_PER_REQUEST, chunk, dayKey, diff, sessionKey, toDay, toSession } from './payload.js'
+import { MAX_SESSIONS_PER_REQUEST, chunk, dayKey, dayRollups, diff, sessionKey, toDay, toSession } from './payload.js'
 import { INTERVAL_MINUTES, installSchedule, removeSchedule, scheduleInstalled, schedulerLabel } from './schedule.js'
+import { dueForCheck, installedVersion, isNpmInstall, updateIfNewer } from './update.js'
 import {
   CONTEXT_BATCH,
   CONTEXT_BUDGET_MS,
@@ -35,6 +36,8 @@ Manaflow mengirim data pemakaian AI coding dari laptop ini ke dashboard tim.
   Tidak dikirim : isi prompt, jawaban model, kode, isi file.
   Dilihat oleh  : lead dan orang yang diberi akses dashboard.
   Disimpan      : 3 bulan.
+  Pembaruan     : program ini memperbarui dirinya sendiri dari GitHub, dicek
+                  sekali sehari. Matikan dengan \`manaflow autoupdate off\`.
 
 Judul sesi dan nama project ikut terkirim apa adanya.
 `
@@ -109,6 +112,7 @@ export async function login(args, { version, out }) {
     deviceId: previous?.deviceId ?? randomUUID(),
     deviceName: flag(args, '--name') ?? previous?.deviceName ?? hostname(),
     version,
+    autoUpdate: args.includes('--no-auto-update') ? false : (previous?.autoUpdate ?? true),
   }
   // Registers the device and proves the token works before anything is saved.
   await post(config, '/v1/ingest', { device: device(config) })
@@ -130,7 +134,15 @@ export async function push(_args, { version, out }) {
 
   const collected = await collect(collectionWindow(WINDOW_DAYS))
   const state = loadState()
-  const { changedSessions, changedDays, seen } = diff(collected.sessions.map(toSession), collected.daily.map(toDay), state.sent)
+  // Today's usage payload is read first: its history carries the per-day token
+  // counts the day rows need. If codeburn fails here the days go out without
+  // them and the payload is tried again further down.
+  const today = await todayPayload(collected.daily).catch(() => null)
+  const tokens = new Map((today?.history?.daily ?? []).map((day) => [day.date, day]))
+  const sessions = collected.sessions.map(toSession)
+  const rollups = dayRollups(sessions)
+  const days = collected.daily.map((row) => toDay(row, rollups.get(row.date), tokens.get(row.date)))
+  const { changedSessions, changedDays, seen } = diff(sessions, days, state.sent)
 
   // Fingerprints are recorded per accepted batch, so a failure midway resends
   // only what the server has not confirmed.
@@ -160,25 +172,60 @@ export async function push(_args, { version, out }) {
   // The per-member Usage and Context views. Sent after the core data so a
   // failure here never costs the sessions above.
   try {
-    const periods = await pushUsage(config, state, collected.daily)
+    const periods = await pushUsage(config, state, today)
     const trees = await pushContexts(config, state, collected.sessions)
     out(`Usage: ${periods} periode. Context: ${trees.sent} sesi${trees.waiting ? ` (${trees.waiting} menunggu kiriman berikutnya)` : ''}.\n`)
   } finally {
     saveState(state)
   }
+
+  await autoUpdate(config, state, version, out)
 }
 
-async function pushUsage(config, state, daily) {
+// Once a day, after the data is safely sent: move to the newest collector if
+// there is one. A failure is reported and otherwise ignored, so a laptop that
+// cannot update keeps pushing with the version it has.
+async function autoUpdate(config, state, version, out) {
+  if (config.autoUpdate === false || !isNpmInstall() || !dueForCheck(state.updateCheckedAt)) return
+  state.updateCheckedAt = Date.now()
+  saveState(state)
+  try {
+    const moved = await updateIfNewer(version)
+    if (moved) out(`Collector diperbarui: ${version} -> ${moved}. Berlaku mulai kiriman berikutnya.\n`)
+  } catch (err) {
+    out(`Cek pembaruan gagal: ${err.message}\n`)
+  }
+}
+
+export async function update(_args, { version, out }) {
+  if (!isNpmInstall()) throw new UserError('Ini salinan dari git, bukan hasil `npm install -g`; perbarui dengan `git pull`.')
+  const moved = await updateIfNewer(version)
+  out(moved ? `Diperbarui: ${version} -> ${moved}.\n` : `Sudah versi terbaru (${version}).\n`)
+}
+
+export async function autoupdate(args, { out }) {
+  const config = loadConfig()
+  if (!config) throw new UserError('Belum login. Jalankan `manaflow login`.')
+  const [action] = args
+  if (action !== 'on' && action !== 'off') throw new UserError('Pemakaian: manaflow autoupdate on|off')
+  saveConfig({ ...config, autoUpdate: action === 'on' })
+  out(action === 'on' ? 'Pembaruan otomatis aktif: dicek sekali sehari.\n' : 'Pembaruan otomatis mati. Perbarui manual dengan `manaflow update`.\n')
+}
+
+// The `today` payload, with codeburn's daily history rebuilt first if it
+// disagrees with the freshly parsed per-provider figures in `daily`.
+async function todayPayload(daily) {
+  const payload = await usagePayload('today')
+  if (!historyIsStale(payload, daily)) return payload
+  resetDailyCache()
+  return usagePayload('today')
+}
+
+async function pushUsage(config, state, today) {
   const usage = (state.usage ??= { sentAt: {}, prints: {} })
-  let healed = false
   let sentCount = 0
   for (const period of duePeriods(usage.sentAt)) {
-    let payload = await usagePayload(period)
-    if (!healed && historyIsStale(payload, daily)) {
-      resetDailyCache()
-      healed = true
-      payload = await usagePayload(period)
-    }
+    const payload = period === 'today' && today ? today : await usagePayload(period)
     const stripped = stripUsagePayload(payload)
     const print = payloadFingerprint(stripped)
     if (usage.prints[period] !== print) {
@@ -243,6 +290,7 @@ export async function status(_args, { out }) {
       `Token         : ${config.token.slice(0, 6)}…\n` +
       `Kiriman akhir : ${state.lastPush ?? 'belum pernah'}\n` +
       `Sesi terlacak : ${sessions}\n` +
+      `Versi         : ${installedVersion()}${config.autoUpdate === false ? ' (pembaruan otomatis mati)' : ' (pembaruan otomatis aktif)'}\n` +
       `Jadwal        : ${scheduled}\n` +
       `Folder config : ${configDir()}\n`,
   )

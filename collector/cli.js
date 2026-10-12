@@ -1,22 +1,24 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs'
 
-import { login, push, schedule, status, uninstall } from './commands.js'
+import { autoupdate, login, push, schedule, status, uninstall, update } from './commands.js'
 import { appendLog } from './config.js'
 import { UserError } from './errors.js'
 
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 
 const COMMANDS = {
-  login: [login, 'Simpan token member dan pasang jadwal (opsi: --token <token> --name <device> --server <url> --no-schedule)'],
+  login: [login, 'Simpan token member dan pasang jadwal (opsi: --token <token> --name <device> --server <url> --no-schedule --no-auto-update)'],
   push: [push, 'Kirim data pemakaian ke server sekarang'],
   status: [status, 'Tampilkan status login, jadwal, dan kiriman terakhir'],
   schedule: [schedule, 'Pasang atau lepas jadwal otomatis: schedule on|off'],
+  update: [update, 'Perbarui collector ke versi terbaru sekarang'],
+  autoupdate: [autoupdate, 'Nyalakan atau matikan pembaruan otomatis harian: autoupdate on|off'],
   uninstall: [uninstall, 'Lepas jadwal, hapus token dan state dari laptop ini'],
 }
 
 function help() {
-  const rows = Object.entries(COMMANDS).map(([name, [, desc]]) => `  ${name.padEnd(10)} ${desc}`)
+  const rows = Object.entries(COMMANDS).map(([name, [, desc]]) => `  ${name.padEnd(11)} ${desc}`)
   return `manaflow ${version}\n\nPemakaian: manaflow <perintah>\n\n${rows.join('\n')}\n`
 }
 

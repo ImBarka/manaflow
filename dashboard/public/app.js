@@ -137,20 +137,24 @@ function groupBy(rows, key) {
 
 function summarize(memberIds) {
   const { data } = state
-  const usage = data.usage.filter((row) => memberIds.has(row.memberId))
   const daily = data.daily.filter((row) => memberIds.has(row.memberId))
-  const sessions = data.sessions.filter((row) => memberIds.has(row.memberId))
-  const input = sum(sessions, 'inputTokens')
-  const cacheRead = sum(sessions, 'cacheReadTokens')
+  // The server sends each day already rolled up per tool, model and category;
+  // the sums across days are done here. A day pushed by a collector older than
+  // 0.2.0 has totals but no breakdown.
+  const usage = daily.flatMap((day) => (day.breakdown ?? []).map((row) => ({ ...row, memberId: day.memberId, deviceId: day.deviceId })))
+  const input = sum(daily, 'inputTokens')
+  const cacheRead = sum(daily, 'cacheReadTokens')
   return {
     usage,
     daily,
-    cost: sum(usage, 'cost'),
-    calls: sum(usage, 'calls'),
-    sessions: sum(sessions, 'sessions'),
+    cost: sum(daily, 'cost'),
+    calls: sum(daily, 'calls'),
+    // Sessions that began in the period; one spanning several days counts once.
+    sessions: sum(daily, 'sessionsStarted'),
     editTurns: sum(daily, 'editTurns'),
     oneShotTurns: sum(daily, 'oneShotTurns'),
     cacheHit: percent(cacheRead, input + cacheRead, 1),
+    outdated: daily.some((day) => day.breakdown == null),
   }
 }
 
@@ -245,11 +249,9 @@ function dailyRecap(members) {
     const entry = cell(row.day, row.memberId)
     entry.cost += row.cost
     entry.calls += row.calls
+    entry.sessions += row.sessions
     entry.editTurns += row.editTurns
     entry.oneShotTurns += row.oneShotTurns
-  }
-  for (const row of data.sessionDays ?? []) {
-    if (names.has(row.memberId)) cell(row.day, row.memberId).sessions += row.sessions
   }
   if (!days.size) return h('div', { class: 'empty' }, 'Belum ada data pada periode ini.')
 
@@ -450,7 +452,7 @@ function memberDetail(member) {
           h(
             'table',
             {},
-            h('thead', {}, h('tr', {}, h('th', {}, 'Nama'), h('th', {}, 'OS'), h('th', { class: 'num' }, 'Biaya'), h('th', {}, 'Kiriman terakhir'), h('th', {}, ''))),
+            h('thead', {}, h('tr', {}, h('th', {}, 'Nama'), h('th', {}, 'OS · collector'), h('th', { class: 'num' }, 'Biaya'), h('th', {}, 'Kiriman terakhir'), h('th', {}, ''))),
             h(
               'tbody',
               {},
@@ -459,8 +461,8 @@ function memberDetail(member) {
                   'tr',
                   {},
                   h('td', {}, device.name),
-                  h('td', {}, device.os || '—'),
-                  h('td', { class: 'num' }, money(sum(summary.usage.filter((u) => u.deviceId === device.id), 'cost'))),
+                  h('td', {}, `${device.os || '—'} · v${device.version || '?'}`),
+                  h('td', { class: 'num' }, money(sum(summary.daily.filter((day) => day.deviceId === device.id), 'cost'))),
                   h('td', {}, dateTime(device.lastSeen)),
                   h('td', {}, h('a', { class: 'btn', href: `u/?device=${encodeURIComponent(device.id)}` }, 'Usage & Context →')),
                 ),
@@ -551,7 +553,7 @@ function dashboardView() {
   const positions = [...new Set(data.members.map((member) => member.position).filter(Boolean))].sort()
   const members = data.members.filter((member) => !state.position || member.position === state.position)
   const team = summarize(new Set(members.map((member) => member.id)))
-  const active = new Set(team.usage.map((row) => row.memberId)).size
+  const active = new Set(team.daily.filter((day) => day.calls > 0).map((day) => day.memberId)).size
   const selected = members.find((member) => member.id === state.memberId)
 
   const perDay = new Map(daysBetween(data).map((day) => [day, { day, cost: 0, calls: 0 }]))
@@ -586,6 +588,13 @@ function dashboardView() {
       h('button', { class: 'btn', onclick: () => logout() }, 'Keluar'),
     ),
     state.error ? h('div', { class: 'error' }, state.error) : null,
+    team.outdated
+      ? h(
+          'div',
+          { class: 'muted', style: 'margin:0 4px 10px' },
+          'Sebagian hari dikirim oleh collector versi lama: totalnya benar, tetapi rincian per model, tool, dan jumlah sesi belum lengkap sampai laptop itu diperbarui.',
+        )
+      : null,
     h(
       'div',
       { class: 'grid tiles' },

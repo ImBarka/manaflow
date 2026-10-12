@@ -142,6 +142,12 @@ Rincian sesi diringkas menjadi per hari + kategori task + model.
 - Batas pemulihan: Claude Code menghapus file sesi lokal setelah 30 hari. Data yang tidak
   terkirim dalam 30 hari tidak bisa dipulihkan.
 - Syarat: Node 22.13 atau lebih baru (syarat dari codeburn).
+- Pembaruan otomatis (sejak 0.2.0): sekali sehari, setelah data terkirim, collector membaca versi di
+  `package.json` branch `main` di GitHub dan menjalankan `npm install -g github:ImBarka/manaflow` bila
+  lebih baru. Hanya untuk salinan hasil `npm install -g`, bukan git checkout. Bisa dimatikan per
+  laptop (`manaflow autoupdate off`). Konsekuensi: apa pun yang masuk `main` akan terpasang di semua
+  laptop dalam sehari, jadi `main` hanya boleh berisi kode yang sudah teruji, dan nomor versi di
+  `package.json` harus dinaikkan tiap rilis collector (tanpa itu tidak ada yang ter-update).
 
 ## 7. Server
 
@@ -161,7 +167,16 @@ Batas paket gratis Cloudflare (dicek di dokumentasi resmi pada 2026-10-07):
 | Baris dibaca D1 | 5 juta per hari | Bergantung pada query dashboard |
 | Penyimpanan D1 | 5 GB | Jauh di bawah batas untuk 3 bulan |
 
-Bila batas harian D1 terlampaui, semua query ditolak sampai hari berikutnya. Karena itu
+Batas baca pernah habis (8 Okt 2026, kiriman ditolak dengan HTTP 500): halaman tim menjumlahkan
+segmen JSON semua sesi tiap kali dibuka, ±24.500 baris per tampilan dengan 2.194 sesi, dan D1
+menghitung tiap elemen `json_each` sebagai baris yang dibaca. Sejak collector 0.2.0, tiap hari
+dikirim sudah teringkas (per tool, model, kategori, jumlah sesi, token) dan disimpan di baris
+`daily`; halaman tim hanya membaca satu baris per device per hari (272 baris untuk 30 hari pada
+12 device), dan penjumlahan dilakukan di browser. Aturan untuk seterusnya: jangan menjalankan
+`json_each` atas tabel `sessions` pada endpoint yang dibuka berulang-ulang.
+
+Bila batas harian D1 terlampaui, semua query ditolak sampai hari berikutnya (server menjawab 503
+beserta alasannya; collector menyimpan yang belum terkirim dan mencoba lagi). Karena itu
 collector hanya mengirim sesi yang berubah, dan sesi yang sudah selesai tidak dikirim ulang.
 Ketersediaan Cron Trigger di paket gratis belum dicek.
 
