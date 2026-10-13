@@ -24,6 +24,7 @@ const state = {
   openDay: null,
   data: null,
   sessions: null,
+  sessionAccounts: new Map(),
   error: '',
 }
 
@@ -111,8 +112,11 @@ async function loadSessions() {
   const memberId = state.memberId
   state.sessions = null
   try {
-    const { sessions } = await api(`/v1/sessions?member=${memberId}&from=${from}&to=${to}`)
-    if (state.memberId === memberId) state.sessions = sessions
+    const { sessions, accounts } = await api(`/v1/sessions?member=${memberId}&from=${from}&to=${to}`)
+    if (state.memberId === memberId) {
+      state.sessions = sessions
+      state.sessionAccounts = new Map(accounts.map((account) => [account.id, account]))
+    }
   } catch {
     return
   }
@@ -145,6 +149,51 @@ function groupBy(rows, key) {
     groups.set(name, group)
   }
   return [...groups.values()].sort((a, b) => b.cost - a.cost)
+}
+
+// How an account is shown: its masked email and plan. Claude Code's session files
+// do not name the account, so each session was marked with the account signed in
+// when the collector last saw it change; sessions from before that stay unmarked.
+function accountName(account, id) {
+  if (!account) return `Akun ${String(id).slice(0, 4)}`
+  return [account.label || `Akun ${id.slice(0, 4)}`, account.plan].filter(Boolean).join(' · ')
+}
+
+function groupAccounts(usage, { withMember }) {
+  const { data } = state
+  const members = new Map(data.members.map((member) => [member.id, member.name]))
+  const accounts = new Map(data.accounts.map((account) => [`${account.memberId}|${account.id}`, account]))
+  const groups = new Map()
+  for (const row of usage) {
+    const marked = Boolean(row.account)
+    const key = marked ? `${row.memberId}|${row.account}` : '-'
+    let group = groups.get(key)
+    if (!group) {
+      const name = marked ? accountName(accounts.get(key), row.account) : 'Belum ditandai'
+      group = { name: withMember && marked ? `${members.get(row.memberId) ?? '—'} · ${name}` : name, cost: 0, calls: 0 }
+      groups.set(key, group)
+    }
+    group.cost += row.cost ?? 0
+    group.calls += row.calls ?? 0
+  }
+  return { items: [...groups.values()].sort((a, b) => b.cost - a.cost), anyMarked: groups.size > (groups.has('-') ? 1 : 0) }
+}
+
+// The per-account panel, or nothing while no session has been marked yet.
+function accountPanel(usage, withMember) {
+  const { items, anyMarked } = groupAccounts(usage, { withMember })
+  if (!anyMarked) return null
+  return h(
+    'div',
+    { class: 'grid two' },
+    h(
+      'div',
+      { class: 'card' },
+      h('h2', {}, 'Biaya per akun Claude'),
+      barList(items),
+      h('div', { class: 'note muted', style: 'margin-top:10px;font-size:12px' }, 'Perkiraan: sesi ditandai dengan akun yang sedang login saat terakhir terlihat berubah.'),
+    ),
+  )
 }
 
 function summarize(memberIds) {
@@ -484,6 +533,7 @@ function memberDetail(member) {
         ),
       ),
     ),
+    accountPanel(summary.usage, false),
     h(
       'div',
       { class: 'card' },
@@ -508,6 +558,7 @@ function memberDetail(member) {
                     h('th', {}, 'Judul'),
                     h('th', {}, 'Project'),
                     h('th', {}, 'Tool'),
+                    h('th', {}, 'Akun'),
                     h('th', {}, 'Model'),
                     h('th', { class: 'num' }, 'Biaya'),
                     h('th', { class: 'num' }, 'Calls'),
@@ -526,6 +577,7 @@ function memberDetail(member) {
                       h('td', { class: 'wrap' }, s.title || '—'),
                       h('td', {}, s.project || '—'),
                       h('td', {}, s.provider),
+                      h('td', {}, s.accountId ? accountName(state.sessionAccounts.get(s.accountId), s.accountId) : '—'),
                       h('td', {}, s.models.join(', ') || '—'),
                       h('td', { class: 'num' }, money(s.cost)),
                       h('td', { class: 'num' }, count(s.calls)),
@@ -635,6 +687,7 @@ function dashboardView() {
       h('div', { class: 'card' }, h('h2', {}, 'Biaya per model'), barList(groupBy(team.usage, 'model'))),
       h('div', { class: 'card' }, h('h2', {}, 'Biaya per tool'), barList(groupBy(team.usage, 'provider'))),
     ),
+    accountPanel(team.usage, true),
     h(
       'div',
       { class: 'card', style: 'margin-bottom:24px' },

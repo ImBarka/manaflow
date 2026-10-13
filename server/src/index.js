@@ -232,7 +232,7 @@ async function dashboard(request, env, url) {
   // One row per device and day, already rolled up by the collector. Reading the
   // sessions table here instead costs a row per session, segment and model on
   // every page view, which is what used up the free plan's daily read allowance.
-  const [members, devices, daily] = await env.DB.batch([
+  const [members, devices, daily, accounts] = await env.DB.batch([
     env.DB.prepare('SELECT id, name, position, revoked_at IS NOT NULL AS revoked FROM members'),
     env.DB.prepare('SELECT id, member_id AS memberId, name, os, collector_version AS version, last_seen AS lastSeen FROM devices'),
     env.DB.prepare(
@@ -242,12 +242,14 @@ async function dashboard(request, env, url) {
               cache_read_tokens AS cacheReadTokens, breakdown
        FROM daily WHERE day BETWEEN ? AND ?`,
     ).bind(from, to),
+    // A handful of rows per member: the Claude accounts sessions can be marked with.
+    env.DB.prepare('SELECT member_id AS memberId, id, label, plan, org FROM accounts'),
   ])
   // `breakdown` is stored as JSON text; it is spliced in as is rather than
   // parsed and re-serialised, to stay inside the CPU budget. The browser
   // does the per-model and per-tool sums.
   const days = daily.results.map(({ breakdown, ...row }) => `${JSON.stringify(row).slice(0, -1)},"breakdown":${breakdown ?? 'null'}}`)
-  const head = JSON.stringify({ from, to, members: members.results, devices: devices.results })
+  const head = JSON.stringify({ from, to, members: members.results, devices: devices.results, accounts: accounts.results })
   return new Response(`${head.slice(0, -1)},"daily":[${days.join(',')}]}`, { headers: { 'content-type': 'application/json' } })
 }
 
@@ -257,17 +259,19 @@ async function memberSessions(request, env, url) {
   const memberId = Number(url.searchParams.get('member'))
   if (!range || !Number.isInteger(memberId)) return json(400, { error: 'member, from and to are required' })
 
-  const rows = await env.DB.prepare(
-    `SELECT s.provider, s.session_id AS sessionId, s.device_id AS deviceId, s.title, s.project, s.models, s.cost,
-            s.calls, s.turns, s.input_tokens AS inputTokens, s.output_tokens AS outputTokens,
-            s.cache_read_tokens AS cacheReadTokens, s.cache_write_tokens AS cacheWriteTokens,
-            s.started_at AS startedAt, s.ended_at AS endedAt, s.duration_ms AS durationMs
-     FROM sessions s WHERE s.member_id = ? AND ${IN_RANGE}
-     ORDER BY s.started_at DESC LIMIT 500`,
-  )
-    .bind(memberId, range.from, range.to)
-    .all()
-  return json(200, { sessions: rows.results.map((row) => ({ ...row, models: JSON.parse(row.models) })) })
+  const [rows, accounts] = await env.DB.batch([
+    env.DB.prepare(
+      `SELECT s.provider, s.session_id AS sessionId, s.device_id AS deviceId, s.title, s.project, s.models, s.cost,
+              s.calls, s.turns, s.input_tokens AS inputTokens, s.output_tokens AS outputTokens,
+              s.cache_read_tokens AS cacheReadTokens, s.cache_write_tokens AS cacheWriteTokens,
+              s.started_at AS startedAt, s.ended_at AS endedAt, s.duration_ms AS durationMs,
+              s.account_id AS accountId
+       FROM sessions s WHERE s.member_id = ? AND ${IN_RANGE}
+       ORDER BY s.started_at DESC LIMIT 500`,
+    ).bind(memberId, range.from, range.to),
+    env.DB.prepare('SELECT id, label, plan, org FROM accounts WHERE member_id = ?').bind(memberId),
+  ])
+  return json(200, { sessions: rows.results.map((row) => ({ ...row, models: JSON.parse(row.models) })), accounts: accounts.results })
 }
 
 function sessionStatement(db, memberId, deviceId, s, now) {
@@ -281,9 +285,10 @@ function sessionStatement(db, memberId, deviceId, s, now) {
     .prepare(
       `INSERT INTO sessions (device_id, provider, session_id, member_id, title, project, models, cost, calls, turns,
          input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, started_at, ended_at, duration_ms,
-         segments, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         segments, updated_at, account_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (device_id, provider, session_id) DO UPDATE SET
+         account_id = COALESCE(excluded.account_id, sessions.account_id),
          title = excluded.title, project = excluded.project, models = excluded.models, cost = excluded.cost,
          calls = excluded.calls, turns = excluded.turns, input_tokens = excluded.input_tokens,
          output_tokens = excluded.output_tokens, cache_read_tokens = excluded.cache_read_tokens,
@@ -311,10 +316,28 @@ function sessionStatement(db, memberId, deviceId, s, now) {
       int(s.durationMs),
       segments,
       now,
+      // A session sent without a mark keeps the one it has.
+      ACCOUNT_ID.test(s.accountId ?? '') ? s.accountId : null,
     )
 }
 
-const MAX_BREAKDOWN_BYTES = 16 * 1024
+const ACCOUNT_ID = /^[0-9a-f]{12}$/
+const MAX_ACCOUNTS = 10
+
+function accountStatement(db, memberId, a, now) {
+  if (!ACCOUNT_ID.test(a?.id ?? '')) return null
+  return db
+    .prepare(
+      `INSERT INTO accounts (member_id, id, label, plan, org, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (member_id, id) DO UPDATE SET
+         label = excluded.label, plan = excluded.plan, org = excluded.org, last_seen = excluded.last_seen`,
+    )
+    // An organization name with an email in it (Claude's default for a personal
+    // account) would expose the address the label masks, so it is dropped here too.
+    .bind(memberId, a.id, str(a.label, 60), str(a.plan, 20), str(a.org, 60).includes('@') ? '' : str(a.org, 60), now, now)
+}
+
+const MAX_BREAKDOWN_BYTES = 32 * 1024
 
 function dailyStatement(db, memberId, deviceId, d, now) {
   if (!DAY.test(d?.day ?? '')) return null
@@ -373,6 +396,12 @@ async function ingest(request, env) {
     ).bind(deviceId, member.id, str(body.device.name, 80) || 'unknown', str(body.device.os, 20), str(body.device.version, 20), now, now),
   ]
   let rejected = 0
+  const accounts = Array.isArray(body.accounts) ? body.accounts.slice(0, MAX_ACCOUNTS) : []
+  for (const a of accounts) {
+    const stmt = accountStatement(env.DB, member.id, a, now)
+    if (stmt) statements.push(stmt)
+    else rejected += 1
+  }
   for (const s of sessions) {
     const stmt = sessionStatement(env.DB, member.id, deviceId, s, now)
     if (stmt) statements.push(stmt)

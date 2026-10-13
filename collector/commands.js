@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto'
-import { hostname, platform } from 'node:os'
+import { homedir, hostname, platform } from 'node:os'
+import { join } from 'node:path'
 import { createInterface } from 'node:readline/promises'
 
+import { accountMarkKey, indexSessions, markChanged, readAccount } from './accounts.js'
 import { collect, collectionWindow, contextTree, resetDailyCache, usagePayload } from './codeburn.js'
 import { configDir, loadConfig, loadState, removeAll, saveConfig, saveState } from './config.js'
 import { UserError } from './errors.js'
@@ -32,7 +34,9 @@ const NOTICE = `
 Manaflow mengirim data pemakaian AI coding dari laptop ini ke dashboard tim.
 
   Dikirim       : judul sesi, nama project, tool, model, jumlah call dan turn,
-                  token, biaya, kategori task, waktu mulai dan selesai.
+                  token, biaya, kategori task, waktu mulai dan selesai, dan
+                  akun Claude yang sedang login (email disamarkan, mis.
+                  na***@gmail.com, beserta jenis langganannya).
   Tidak dikirim : isi prompt, jawaban model, kode, isi file.
   Dilihat oleh  : lead dan orang yang diberi akses dashboard.
   Disimpan      : 3 bulan.
@@ -140,15 +144,43 @@ export async function push(_args, { version, out }) {
   const today = await todayPayload(collected.daily).catch(() => null)
   const tokens = new Map((today?.history?.daily ?? []).map((day) => [day.date, day]))
   const sessions = collected.sessions.map(toSession)
-  const rollups = dayRollups(sessions)
+  const changedSessionsOnly = diff(sessions, [], state.sent)
+
+  // Which Claude account each changed session belongs to: the account signed in,
+  // in the folder the session lives in, right now. Sessions that did not change
+  // keep their earlier mark, and ones from before this feature stay unmarked.
+  const dirs = claudeConfigDirs(today)
+  const accountOf = new Map(dirs.map((dir) => [dir, readAccount(dir)]))
+  const inWindow = new Set(sessions.map(accountMarkKey))
+  const marks = Object.fromEntries(
+    Object.entries(markChanged(changedSessionsOnly.changedSessions, indexSessions(dirs), accountOf, state.accountMarks ?? {})).filter(([key]) =>
+      inWindow.has(key),
+    ),
+  )
+  state.accountMarks = marks
+  const accounts = [...new Map([...accountOf.values()].filter(Boolean).map((account) => [account.id, account])).values()]
+  const accountsPrint = JSON.stringify(accounts)
+  const sendAccounts = accounts.length > 0 && (state.accountsPrint !== accountsPrint || dueForAccounts(state.accountsSentAt))
+
+  const rollups = dayRollups(sessions, marks)
   const days = collected.daily.map((row) => toDay(row, rollups.get(row.date), tokens.get(row.date)))
-  const { changedSessions, changedDays, seen } = diff(sessions, days, state.sent)
+  const changedDaysOnly = diff([], days, state.sent)
+  const { changedSessions } = changedSessionsOnly
+  const { changedDays } = changedDaysOnly
+  const seen = { ...changedSessionsOnly.seen, ...changedDaysOnly.seen }
 
   // Fingerprints are recorded per accepted batch, so a failure midway resends
   // only what the server has not confirmed.
   const sent = Object.fromEntries(Object.entries(state.sent).filter(([key]) => key in seen))
-  const batches = chunk(changedSessions, MAX_SESSIONS_PER_REQUEST).map((sessions) => ({ sessions, daily: [] }))
+  const batches = chunk(changedSessions, MAX_SESSIONS_PER_REQUEST).map((batch) => ({
+    sessions: batch.map((session) => ({ ...session, accountId: marks[accountMarkKey(session)] ?? null })),
+    daily: [],
+  }))
   if (changedDays.length) batches.push({ sessions: [], daily: changedDays })
+  if (sendAccounts) {
+    if (!batches.length) batches.push({ sessions: [], daily: [] })
+    batches[0].accounts = accounts
+  }
 
   let rejected = 0
   try {
@@ -157,6 +189,7 @@ export async function push(_args, { version, out }) {
       rejected += result.rejected ?? 0
       for (const s of batch.sessions) sent[sessionKey(s)] = seen[sessionKey(s)]
       for (const d of batch.daily) sent[dayKey(d)] = seen[dayKey(d)]
+      if (batch.accounts) Object.assign(state, { accountsPrint, accountsSentAt: Date.now() })
     }
   } finally {
     Object.assign(state, { sent, lastPush: batches.length ? new Date().toISOString() : state.lastPush })
@@ -230,6 +263,18 @@ export async function autoupdate(args, { out }) {
       : 'Pembaruan otomatis mati. Manaflow hanya memberi tahu bila ada versi baru; pasang dengan `manaflow update`.\n',
   )
 }
+
+// The Claude config folders that hold session transcripts, as codeburn found
+// them (CLAUDE_CONFIG_DIRS, CLAUDE_CONFIG_DIR, the default). Falls back to the
+// default folder when codeburn could not be read.
+function claudeConfigDirs(payload) {
+  const found = (payload?.claudeConfigs?.options ?? []).map((option) => option.path).filter(Boolean)
+  return found.length ? found : [join(homedir(), '.claude')]
+}
+
+// The accounts are re-sent at least once a day so their last-seen time moves.
+const ACCOUNTS_REFRESH_MS = 24 * 60 * 60 * 1000
+const dueForAccounts = (sentAt) => Date.now() - (sentAt ?? 0) >= ACCOUNTS_REFRESH_MS
 
 // The `today` payload, with codeburn's daily history rebuilt first if it
 // disagrees with the freshly parsed per-provider figures in `daily`.

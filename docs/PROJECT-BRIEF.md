@@ -119,6 +119,17 @@ Cache codeburn milik member sendiri tidak disentuh.
 
 Karena itu angka di dashboard codeburn milik member bisa lebih kecil dari angka manaflow.
 
+Akun Claude (collector 0.3.0, keputusan 2026-10-12, opsi "email disamarkan + jenis langganan"):
+file sesi Claude Code tidak mencatat akun, jadi collector menandai sesi yang berubah dengan akun
+yang sedang login di folder config tempat sesi itu berada (`~/.claude.json` untuk folder bawaan,
+`<folder>/.claude.json` untuk folder lain; folder dikenali lewat codeburn). Dua akun di folder
+config terpisah terbedakan dengan akurat; ganti akun lewat `/login` di folder yang sama hanya
+terbedakan dalam ketelitian satu interval kirim (30 menit), dan sesi yang melintasi pergantian
+akun ikut akun terakhir. Sesi dari sebelum fitur ini, sesi Claude Desktop, dan tool selain Claude
+Code tetap "belum ditandai". Yang dikirim per akun: id acak (hash), email disamarkan (dua huruf
+pertama + domain), jenis langganan. Nama organisasi tidak dikirim bila memuat email (bawaan Claude
+untuk akun pribadi: "email's Organization"); server juga membuangnya.
+
 Yang sengaja dibuang collector sebelum kirim: nama branch, tautan PR, dan path lokal project.
 Rincian sesi diringkas menjadi per hari + kategori task + model.
 

@@ -11,6 +11,7 @@ dashboard tim tiap 30 menit.
 | | |
 |---|---|
 | **Dikirim** | Judul sesi, nama project, tool, model, jumlah call dan turn, jumlah token, biaya setara tarif API, kategori task, waktu mulai dan selesai, nama file yang sering diedit ulang (nama file saja), nama MCP server dan skill yang dipakai, ukuran context per jenis blok |
+| **Akun Claude** | Akun Claude yang sedang login di laptopmu, supaya pemakaian dua akun bisa dibedakan: email disamarkan (`na***@gmail.com`), jenis langganan (Pro, Max, Team), dan kode acak. Email lengkap dan id akun tidak dikirim |
 | **Tidak dikirim** | Isi prompt, jawaban model, kode, isi file, nama branch, tautan PR, path folder di laptopmu |
 | **Dilihat oleh** | Lead dan orang yang diberi akses dashboard |
 | **Disimpan** | 3 bulan, lalu dihapus otomatis |

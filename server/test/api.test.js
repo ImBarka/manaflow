@@ -348,3 +348,34 @@ test('the dashboard reads one row per device-day, not per session', async () => 
   assert.ok(res.meta.rows_read <= inRange + 5, `read ${res.meta.rows_read} rows for ${inRange} days (sessions table has ${sessions})`)
   assert.equal((await call('GET', '/v1/dashboard?from=2026-08-01&to=2026-08-31', { token: viewer.token })).status, 200)
 })
+
+test('accounts and the account mark on a session are stored, and a later push without a mark keeps it', async () => {
+  const member = await createMember('Two Accounts')
+  const viewer = await createViewer('Lead 7')
+  const device = { id: 'babababa-baba-4aba-8aba-babababababa', name: 'P' }
+  const accounts = [
+    { id: 'aaaaaaaaaaaa', label: 'tw***@gmail.com', plan: 'Pro', org: "tw@gmail.com's Organization" },
+    { id: 'bbbbbbbbbbbb', label: 'tw***@kantor.id', plan: 'Team', org: '' },
+    { id: 'not-an-id', label: 'x' },
+  ]
+  const first = await call('POST', '/v1/ingest', {
+    token: member.token,
+    body: { device, accounts, sessions: [session({ sessionId: 'marked', accountId: 'aaaaaaaaaaaa' }), session({ sessionId: 'unmarked' })] },
+  })
+  assert.deepEqual(await first.json(), { accepted: 4, rejected: 1 })
+
+  // The same session pushed again with no mark, and another with a bad mark.
+  await call('POST', '/v1/ingest', { token: member.token, body: { device, sessions: [session({ sessionId: 'marked', calls: 99 }), session({ sessionId: 'unmarked', accountId: 'zzz' })] } })
+
+  const list = await (await call('GET', `/v1/sessions?member=${member.id}&from=2026-10-01&to=2026-10-31`, { token: viewer.token })).json()
+  const byId = Object.fromEntries(list.sessions.map((s) => [s.sessionId, s]))
+  assert.equal(byId.marked.accountId, 'aaaaaaaaaaaa')
+  assert.equal(byId.marked.calls, 99)
+  assert.equal(byId.unmarked.accountId, null)
+  assert.deepEqual(list.accounts.map((a) => [a.id, a.label, a.plan]).sort(), [['aaaaaaaaaaaa', 'tw***@gmail.com', 'Pro'], ['bbbbbbbbbbbb', 'tw***@kantor.id', 'Team']])
+
+  const dash = await (await call('GET', '/v1/dashboard?from=2026-10-01&to=2026-10-31', { token: viewer.token })).json()
+  assert.equal(dash.accounts.filter((a) => a.memberId === member.id).length, 2)
+  assert.equal(dash.accounts.find((a) => a.id === 'aaaaaaaaaaaa').org, '', 'an org that carries an email is dropped')
+  assert.ok(!JSON.stringify(dash.accounts).includes('@gmail.com') || JSON.stringify(dash.accounts).includes('***@'))
+})

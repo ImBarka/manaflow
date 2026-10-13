@@ -11,3 +11,4 @@ dist/
 docs/list_karyawan.md
 .member-tokens.csv
 dashboard/public/u/
+.local-viewer-token

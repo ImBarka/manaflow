@@ -125,9 +125,9 @@ test('days are rolled up per tool, model and category, with session counts', () 
   // The first session began the day before, so it is active here but not started here.
   assert.deepEqual([day.sessions, day.sessionsStarted], [3, 2])
   assert.deepEqual(day.breakdown, [
-    { provider: 'claude', model: 'Opus 5', category: 'coding', cost: 4, calls: 6, inputTokens: 6, outputTokens: 12 },
-    { provider: 'codex', model: 'gpt-5', category: 'debugging', cost: 4, calls: 1, inputTokens: 1, outputTokens: 2 },
-    { provider: 'claude', model: 'Sonnet 5.5', category: 'coding', cost: 0.5, calls: 2, inputTokens: 2, outputTokens: 4 },
+    { provider: 'claude', model: 'Opus 5', category: 'coding', account: '', cost: 4, calls: 6, inputTokens: 6, outputTokens: 12 },
+    { provider: 'codex', model: 'gpt-5', category: 'debugging', account: '', cost: 4, calls: 1, inputTokens: 1, outputTokens: 2 },
+    { provider: 'claude', model: 'Sonnet 5.5', category: 'coding', account: '', cost: 0.5, calls: 2, inputTokens: 2, outputTokens: 4 },
   ])
 })
 
@@ -139,4 +139,19 @@ test('a day carries its rollup and token counts, and omits the tokens when unkno
   assert.deepEqual(withTokens.breakdown, rollup.breakdown)
   const without = toDay(row, rollup, undefined)
   assert.ok(!('inputTokens' in without) && !('cacheReadTokens' in without))
+})
+
+test('days are rolled up per account too, and sessions without a mark stay separate', () => {
+  const model = (cost) => ({ cost, calls: 1, inputTokens: 1, outputTokens: 1 })
+  const seg = (cost) => [{ day: '2026-10-06', category: 'coding', models: { 'Opus 5': model(cost) } }]
+  const sessions = [
+    { provider: 'claude', sessionId: 'a', segments: seg(2) },
+    { provider: 'claude', sessionId: 'b', segments: seg(3) },
+    { provider: 'claude', sessionId: 'c', segments: seg(5) },
+    { provider: 'claude', sessionId: 'd', segments: seg(7) },
+  ]
+  const marks = { 'claude:a': 'acc1', 'claude:b': 'acc1', 'claude:c': 'acc2' }
+  const rows = dayRollups(sessions, marks).get('2026-10-06').breakdown
+  const byAccount = Object.fromEntries(rows.map((row) => [row.account, [row.cost, row.calls]]))
+  assert.deepEqual(byAccount, { '': [7, 1], acc1: [5, 2], acc2: [5, 1] })
 })

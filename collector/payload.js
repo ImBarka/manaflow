@@ -72,7 +72,7 @@ export function mergeDaily(dailyLists) {
 // answer the team page from one row per device and day instead of scanning
 // every session: how many sessions were active, how many began that day, and
 // cost and calls per tool, model and task category.
-export function dayRollups(sessions) {
+export function dayRollups(sessions, marks = {}) {
   const days = new Map()
   const rollup = (day) => {
     let entry = days.get(day)
@@ -89,11 +89,13 @@ export function dayRollups(sessions) {
       entry.sessions += 1
       if (index === 0) entry.sessionsStarted += 1
     })
+    // The Claude account the session was marked with ('' when unknown).
+    const account = marks[`${session.provider}:${session.sessionId}`] ?? ''
     for (const seg of session.segments) {
       const { rows } = rollup(seg.day)
       for (const [model, usage] of Object.entries(seg.models)) {
-        const key = `${session.provider}|${model}|${seg.category}`
-        const row = rows.get(key) ?? { provider: session.provider, model, category: seg.category, cost: 0, calls: 0, inputTokens: 0, outputTokens: 0 }
+        const key = `${session.provider}|${model}|${seg.category}|${account}`
+        const row = rows.get(key) ?? { provider: session.provider, model, category: seg.category, account, cost: 0, calls: 0, inputTokens: 0, outputTokens: 0 }
         row.cost += usage.cost
         row.calls += usage.calls
         row.inputTokens += usage.inputTokens
